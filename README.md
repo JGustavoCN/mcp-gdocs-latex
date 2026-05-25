@@ -1,7 +1,7 @@
 <div align="center">
   <img src="logo.svg" alt="TCC DocsLaTeX Bridge Logo" width="280">
 
-  # MCP TCC — Google Docs ↔ LaTeX Bridge
+# MCP TCC — Google Docs ↔ LaTeX Bridge
 
   <p>
     <img alt="Go Version" src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge&logo=go">
@@ -14,7 +14,7 @@
 
 <br>
 
-O **TCC DocsLaTeX Bridge** é um servidor [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) desenhado especificamente para ajudar na criação de teses, dissertações e TCCs. Ele fornece a agentes de IA — como o **Claude Desktop** ou o **Cursor IDE** — o poder de ler, estruturar, comentar e modificar seus documentos do Google Docs de forma atômica e segura, bem como salvar as versões finais no seu repositório local em `.tex`. 
+O **TCC DocsLaTeX Bridge** é um servidor [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) desenhado especificamente para ajudar na criação de teses, dissertações e TCCs. Ele fornece a agentes de IA — como o **Claude Desktop** ou o **Cursor IDE** — o poder de ler, estruturar, comentar e modificar seus documentos do Google Docs de forma atômica e segura, bem como salvar as versões finais no seu repositório local em `.tex`.
 
 Tudo isso encapsulado em um **único executável**, eliminando a necessidade de preparar complexos ambientes em Python ou Node.js.
 
@@ -22,11 +22,11 @@ Tudo isso encapsulado em um **único executável**, eliminando a necessidade de 
 
 ## ✨ Arsenal de Ferramentas Disponíveis
 
-Diferente de versões anteriores, o servidor hoje conta com um portfólio robusto de **10 ferramentas avançadas** para maximizar o fluxo de edição da IA:
+Diferente de versões anteriores, o servidor hoje conta com um portfólio robusto de **11 ferramentas avançadas** para maximizar o fluxo de edição da IA:
 
 ### 📖 Descoberta e Leitura
 
-- **`list_available_documents`**: Lista todos os documentos Google Docs que estão acessíveis pela Service Account configurada. Retorna o título, ID e link de cada documento. Use esta ferramenta para descobrir quais documentos o robô pode acessar antes de tentar ler ou modificar um documento específico. Se a variável `ALLOWED_DOC_IDS` estiver configurada, apenas os documentos da lista serão exibidos.
+- **`list_available_documents`**: Lista os documentos do Google Docs e os arquivos PDF compartilhados com o robô. **Funciona como um Health Check:** Se a seção de PDFs retornar vazia, o LLM DEVE parar o fluxo e instruir o usuário a criar um PDF no Drive e compartilhá-lo como Editor com o e-mail do robô.
 - **`get_doc_skeleton`**: Retorna a estrutura hierárquica e lógica de tópicos, capítulos e parágrafos marcados como cabeçalhos ou destaques do documento, contendo seus índices absolutos de caracteres (`start_index` e `end_index`). Essencial para planejar leituras parciais de documentos acadêmicos extensos antes de ler o texto completo.
 - **`read_doc_content`**: Lê o texto do Google Doc e o retorna estruturado em formato Markdown. Aceita parâmetros opcionais de início (`start_index`) e fim (`end_index`) para ler fatias específicas do documento, reduzindo o consumo de tokens em arquivos grandes.
 - **`search_in_doc`**: Pesquisa um termo no Google Doc e retorna os índices inicial e final de todas as ocorrências encontradas junto a um snippet de contexto. Se o parâmetro `is_regex` for verdadeiro, processa a consulta como uma Expressão Regular para buscas complexas ou de padrões de formatação (ABNT).
@@ -42,6 +42,7 @@ Diferente de versões anteriores, o servidor hoje conta com um portfólio robust
 - **`replace_text_in_doc`**: Realiza a substituição de termos de texto no documento. Permite informar o parâmetro `occurrence_index` para alterar uma ocorrência específica (ex: 0 para a primeira ocorrência, 1 para a segunda). Se definido como -1 ou omitido, realiza a substituição de todas as correspondências encontradas.
 - **`multi_replace_doc_block`**: Aplica em lote substituições cirúrgicas de texto em índices absolutos de caracteres. Requer validação exata do texto esperado (`expected_text`) em cada intervalo informado. Executa as alterações de trás para frente no documento para neutralizar o deslocamento de índices (*offset shift*) durante a operação.
 - **`update_local_latex`**: Reescreve o conteúdo de um arquivo `.tex` local no disco. Cria automaticamente um backup (`.bak`) do original antes de sobrescrever. Por segurança, aceita APENAS arquivos com extensão `.tex`. Parâmetros: - `filepath`: Caminho absoluto do arquivo `.tex` (ex: `C:/Users/.../main.tex`) - `new_content`: O conteúdo LaTeX completo que será escrito no arquivo.
+- **`sync_pdf_to_drive`**: Faz o upload do PDF compilado sobrescrevendo os bytes de um arquivo existente. Esta ferramenta não cria arquivos. O LLM deve extrair o ID do PDF usando a ferramenta `list_available_documents` e usá-lo no parâmetro `target_pdf_file_id`.
 
 > **💡 Dica de Ouro:** As ferramentas que exigem o documento aceitam tranquilamente a **URL completa do seu Docs** ou apenas o **ID**. A IA e o servidor lidam com a extração!
 
@@ -50,12 +51,14 @@ Diferente de versões anteriores, o servidor hoje conta com um portfólio robust
 ## 🚀 Como Usar (Em 3 Passos)
 
 ### Passo 1: Obter o Executável
+
 Acesse a aba [**Releases**](https://github.com/JGustavoCN/mcp-gdocs-latex/releases) e faça o download da versão compatível com a sua máquina:
-* 🪟 Windows: `mcp-tcc.exe`
-* 🐧 Linux: `mcp-tcc-linux`
-* 🍎 macOS: `mcp-tcc-darwin`
+- 🪟 Windows: `mcp-tcc.exe`
+- 🐧 Linux: `mcp-tcc-linux`
+- 🍎 macOS: `mcp-tcc-darwin`
 
 ### Passo 2: Credenciais do Google (`credentials.json`)
+
 Baixe a sua chave de autenticação (Service Account) e a coloque **na mesma pasta** que o executável recém-baixado, nomeando-a como `credentials.json`.
 
 <details>
@@ -67,6 +70,7 @@ Baixe a sua chave de autenticação (Service Account) e a coloque **na mesma pas
 4. Acesse: **IAM e Admin** → **Contas de serviço** → **Criar conta de serviço**.
 5. Gere e baixe a chave tipo **JSON**. Renomeie-a para `credentials.json`.
 6. **Importante:** Vá no seu TCC (no Google Docs), clique em "Compartilhar", e convide o e-mail dessa nova Service Account como **Editor**.
+
 </details>
 
 ```text
@@ -80,6 +84,7 @@ Baixe a sua chave de autenticação (Service Account) e a coloque **na mesma pas
 Abra o arquivo de configuração de servidores MCP da sua ferramenta predileta e adicione o servidor do TCC:
 
 **Para o Claude Desktop** (`claude_desktop_config.json`):
+
 ```json
 {
   "mcpServers": {
@@ -91,6 +96,7 @@ Abra o arquivo de configuração de servidores MCP da sua ferramenta predileta e
 ```
 
 **Para o Cursor IDE** (`.cursor/mcp.json`):
+
 ```json
 {
   "mcpServers": {
@@ -100,6 +106,7 @@ Abra o arquivo de configuração de servidores MCP da sua ferramenta predileta e
   }
 }
 ```
+
 **Pronto! 🎉** Sua IA agora se comunica com os servidores do Google Docs!
 
 ---
@@ -134,7 +141,8 @@ make build-linux     # Cross-compile para Linux (bin/mcp-tcc-linux)
 make build-mac       # Cross-compile para macOS (bin/mcp-tcc-darwin)
 ```
 
-### Estrutura do Código:
+### Estrutura do Código
+
 ```text
 ├── cmd/mcp-server/main.go      → Entrypoint central do protocolo stdio
 ├── internal/
@@ -160,7 +168,7 @@ make build-mac       # Cross-compile para macOS (bin/mcp-tcc-darwin)
 R: **De jeito nenhum!** Baixe o executável pronto das Releases. O Go é apenas para desenvolvedores de software que desejam recompilar a fonte.
 
 **P: Minhas chaves e dados do Google Docs estão seguros?**
-R: Sim! O código fonte é público. Toda comunicação é feita unicamente entre o executável rodando na _sua_ máquina e a infraestrutura oficial do Google APIs (utilizando a _sua_ conta de serviço). 
+R: Sim! O código fonte é público. Toda comunicação é feita unicamente entre o executável rodando na *sua* máquina e a infraestrutura oficial do Google APIs (utilizando a *sua* conta de serviço).
 
 **P: A IA vai sobrescrever meu arquivo local `.tex` e jogar fora o conteúdo antigo?**
 R: Toda vez que a ferramenta `update_local_latex` for invocada, o servidor MCP fará proativamente uma cópia em backup (ex: `main.tex.bak`) com o conteúdo antigo, antes de introduzir as novas formatações.

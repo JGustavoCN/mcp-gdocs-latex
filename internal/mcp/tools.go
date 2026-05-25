@@ -26,6 +26,7 @@ func RegisterTools(s *server.MCPServer) {
 	registerResolveComment(s)
 	registerReplaceTextInDoc(s)
 	registerMultiReplaceDocBlock(s)
+	registerSyncPDFToDrive(s)
 	registerUpdateLocalLatex(s)
 }
 
@@ -425,6 +426,47 @@ func handleMultiReplaceDocBlock(ctx context.Context, request mcplib.CallToolRequ
 	return mcplib.NewToolResultText(result), nil
 }
 
+// ─── Tool 9: sync_pdf_to_drive ──────────────────────────────────────────────
+
+func registerSyncPDFToDrive(s *server.MCPServer) {
+	tool := mcplib.NewTool("sync_pdf_to_drive",
+		mcplib.WithDescription(
+			"Faz o upload do PDF compilado sobrescrevendo os bytes de um arquivo existente. Esta ferramenta não cria arquivos. O LLM deve extrair o ID do PDF usando a ferramenta 'list_available_documents' e usá-lo no parâmetro 'target_pdf_file_id'."),
+		mcplib.WithString("local_pdf_path",
+			mcplib.Required(),
+			mcplib.Description("Caminho absoluto ou relativo do arquivo PDF local (ex: 'src/main.pdf')"),
+		),
+		mcplib.WithString("target_pdf_file_id",
+			mcplib.Required(),
+			mcplib.Description("Obrigatório. ID do arquivo PDF existente no drive para atualização contínua."),
+		),
+	)
+	s.AddTool(tool, handleSyncPDFToDrive)
+	log.Println("[INFO] Ferramenta registrada: sync_pdf_to_drive")
+}
+
+func handleSyncPDFToDrive(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	localPDFPath, err := request.RequireString("local_pdf_path")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'local_pdf_path' é obrigatório."), nil
+	}
+
+	targetPdfFileID, err := request.RequireString("target_pdf_file_id")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'target_pdf_file_id' é obrigatório."), nil
+	}
+
+	log.Printf("[INFO] sync_pdf_to_drive → pdf: '%s' | updateID: '%s'", localPDFPath, targetPdfFileID)
+
+	resultStr, err := gdocs.SyncPDFToDrive(ctx, targetPdfFileID, localPDFPath)
+	if err != nil {
+		log.Printf("[ERRO] sync_pdf_to_drive: %v", err)
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	}
+
+	return mcplib.NewToolResultText(resultStr), nil
+}
+
 // ─── Tool 4: update_local_latex ─────────────────────────────────────────────
 
 func registerUpdateLocalLatex(s *server.MCPServer) {
@@ -476,12 +518,7 @@ func handleUpdateLocalLatex(ctx context.Context, request mcplib.CallToolRequest)
 func registerListAvailableDocuments(s *server.MCPServer) {
 	tool := mcplib.NewTool("list_available_documents",
 		mcplib.WithDescription(
-			"Lista todos os documentos Google Docs que estão acessíveis pela\n"+
-				"Service Account configurada. Retorna o título, ID e link de cada documento.\n\n"+
-				"Use esta ferramenta para descobrir quais documentos o robô pode acessar\n"+
-				"antes de tentar ler ou modificar um documento específico.\n\n"+
-				"Se a variável ALLOWED_DOC_IDS estiver configurada, apenas os documentos\n"+
-				"da lista serão exibidos."),
+			"Lista os documentos do Google Docs e os arquivos PDF compartilhados com o robô. Funciona como um Health Check. Se a seção de PDFs retornar vazia, o LLM DEVE parar o fluxo e instruir o usuário a criar um PDF no Drive e compartilhá-lo como Editor com o e-mail do robô."),
 	)
 	s.AddTool(tool, handleListAvailableDocuments)
 	log.Println("[INFO] Ferramenta registrada: list_available_documents")

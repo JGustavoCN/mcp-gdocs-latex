@@ -3,7 +3,6 @@ package gdocs
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"google.golang.org/api/googleapi"
@@ -18,22 +17,23 @@ func ListAvailableDocuments(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("erro ao obter serviço do Drive: %w", err)
 	}
 
-	// Busca apenas Google Docs (não planilhas, slides, etc.)
-	query := "mimeType='application/vnd.google-apps.document' and trashed=false"
+	// Busca Google Docs e PDFs
+	query := "(mimeType='application/vnd.google-apps.document' or mimeType='application/pdf') and trashed=false"
 
-	type docInfo struct {
-		Title string
-		ID    string
-		Link  string
+	type itemInfo struct {
+		Title    string
+		ID       string
+		Link     string
+		MimeType string
 	}
 
-	var allDocs []docInfo
+	var allItems []itemInfo
 	pageToken := ""
 
 	for {
 		call := svc.Files.List().
 			Q(query).
-			Fields(googleapi.Field("nextPageToken,files(id,name,webViewLink)")).
+			Fields(googleapi.Field("nextPageToken,files(id,name,webViewLink,mimeType)")).
 			PageSize(100).
 			OrderBy("name")
 
@@ -43,18 +43,19 @@ func ListAvailableDocuments(ctx context.Context) (string, error) {
 
 		result, err := call.Do()
 		if err != nil {
-			return "", fmt.Errorf("erro ao listar documentos no Drive: %w", err)
+			return "", fmt.Errorf("erro ao listar itens no Drive: %w", err)
 		}
 
 		for _, f := range result.Files {
 			link := f.WebViewLink
-			if link == "" {
+			if link == "" && f.MimeType == "application/vnd.google-apps.document" {
 				link = fmt.Sprintf("https://docs.google.com/document/d/%s/edit", f.Id)
 			}
-			allDocs = append(allDocs, docInfo{
-				Title: f.Name,
-				ID:    f.Id,
-				Link:  link,
+			allItems = append(allItems, itemInfo{
+				Title:    f.Name,
+				ID:       f.Id,
+				Link:     link,
+				MimeType: f.MimeType,
 			})
 		}
 
@@ -64,41 +65,44 @@ func ListAvailableDocuments(ctx context.Context) (string, error) {
 		pageToken = result.NextPageToken
 	}
 
-	// Filtra pela allowlist se configurada
+	// Filtra pela allowlist se configurada (apenas para documentos, não afeta PDFs)
 	allowedIDs := loadAllowedDocIDs()
-	if len(allowedIDs) > 0 {
-		var filtered []docInfo
-		for _, d := range allDocs {
-			if isDocAllowed(d.ID) {
-				filtered = append(filtered, d)
-			}
-		}
-		log.Printf("[INFO] Filtro ALLOWED_DOC_IDS aplicado: %d de %d documentos permitidos",
-			len(filtered), len(allDocs))
-		allDocs = filtered
-	}
+	var docs []itemInfo
+	var pdfs []itemInfo
 
-	if len(allDocs) == 0 {
-		return "INFO: Nenhum documento Google Docs acessível foi encontrado.\n\n" +
-			"Possíveis causas:\n" +
-			"  1. Nenhum documento foi compartilhado com o e-mail da Service Account\n" +
-			"  2. A variável ALLOWED_DOC_IDS está restringindo os resultados\n\n" +
-			"Solução: Compartilhe o Google Doc com o e-mail que aparece no campo\n" +
-			"'client_email' do arquivo credentials.json.", nil
+	for _, item := range allItems {
+		if item.MimeType == "application/pdf" {
+			pdfs = append(pdfs, item)
+		} else {
+			if len(allowedIDs) > 0 && !isDocAllowed(item.ID) {
+				continue
+			}
+			docs = append(docs, item)
+		}
 	}
 
 	var sb strings.Builder
-	sb.WriteString("=== DOCUMENTOS DISPONÍVEIS ===\n")
-	sb.WriteString(fmt.Sprintf("Total: %d documento(s) acessível(is)\n\n", len(allDocs)))
 
-	for i, d := range allDocs {
-		sb.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, d.Title))
-		sb.WriteString(fmt.Sprintf("   ID  : %s\n", d.ID))
-		sb.WriteString(fmt.Sprintf("   Link: %s\n\n", d.Link))
+	sb.WriteString("📄 Documentos Editáveis (Google Docs):\n")
+	if len(docs) == 0 {
+		sb.WriteString("Nenhum documento encontrado (Verifique se compartilhou o Doc com a Service Account).\n")
+	} else {
+		for _, d := range docs {
+			sb.WriteString(fmt.Sprintf("- ID: %s | Nome: %s\n", d.ID, d.Title))
+		}
+	}
+
+	sb.WriteString("\n📕 PDFs Compartilhados (Para Sincronização via Update):\n")
+	if len(pdfs) == 0 {
+		sb.WriteString("(Atenção IA: Se esta lista de PDFs estiver vazia, o ambiente NÃO está configurado para upload).\n")
+	} else {
+		for _, f := range pdfs {
+			sb.WriteString(fmt.Sprintf("- ID: %s | Nome: %s\n", f.ID, f.Title))
+		}
 	}
 
 	if len(allowedIDs) > 0 {
-		sb.WriteString(fmt.Sprintf("ℹ️  Filtro ativo: ALLOWED_DOC_IDS (%d ID(s) configurados)\n", len(allowedIDs)))
+		sb.WriteString(fmt.Sprintf("\nℹ️  Filtro ativo: ALLOWED_DOC_IDS limitou os resultados de documentos.\n"))
 	}
 
 	return sb.String(), nil
