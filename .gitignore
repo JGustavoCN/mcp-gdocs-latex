@@ -1,0 +1,49 @@
+# =============================================
+# .gitignore — Servidor MCP TCC (Go)
+# REGRAS DE SEGURANÇA CRÍTICAS
+# =============================================
+
+# --- Credenciais (NUNCA commitar) ---
+credentials.json
+*.pem
+*.key
+*.p12
+service-account*.json
+
+# --- Variáveis de ambiente ---
+.env
+.env.local
+.env.production
+
+# --- Binários compilados ---
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+mcp-tcc
+mcp-tcc.exe
+
+# --- Artefatos Go ---
+vendor/
+*.test
+*.out
+*.prof
+coverage.html
+
+# --- IDE e editores ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Backups gerados pela tool ---
+*.bak
+
+# --- Servidor Python legado (opcional: remova se quiser manter) ---
+# server_tcc.py
