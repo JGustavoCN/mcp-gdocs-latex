@@ -3,6 +3,8 @@ package gdocs
 import (
 	"context"
 	"fmt"
+	"html"
+	"regexp"
 	"strings"
 
 	"google.golang.org/api/drive/v3"
@@ -178,4 +180,73 @@ func ResolveComment(ctx context.Context, fileID, commentID string) (string, erro
 	}
 
 	return fmt.Sprintf("SUCESSO: Comentário %s marcado como resolvido.", commentID), nil
+}
+
+// CheckCommentCollision valida se o texto esperado cruza com algum comentário não resolvido.
+func CheckCommentCollision(ctx context.Context, fileID string, expectedText string) error {
+	svc, err := GetDriveService(ctx)
+	if err != nil {
+		return fmt.Errorf("erro ao obter serviço do Drive para validação de comentários: %w", err)
+	}
+
+	pageToken := ""
+	for {
+		call := svc.Comments.List(fileID).
+			Fields("nextPageToken,comments(id,quotedFileContent/value,resolved,deleted)").
+			IncludeDeleted(false).
+			PageSize(100)
+
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		result, err := call.Do()
+		if err != nil {
+			return fmt.Errorf("erro ao listar comentários para validação: %w", err)
+		}
+
+		for _, c := range result.Comments {
+			if c.Deleted || c.Resolved {
+				continue
+			}
+
+			if c.QuotedFileContent != nil {
+				quotedValue := c.QuotedFileContent.Value
+				if quotedValue == "" {
+					continue
+				}
+
+				quotedValue = html.UnescapeString(quotedValue)
+				quotedValueNorm := strings.ToLower(strings.TrimSpace(quotedValue))
+				expectedTextNorm := strings.ToLower(strings.TrimSpace(expectedText))
+
+				collision := false
+				if len(quotedValueNorm) < 4 {
+					// Word boundary match para palavras pequenas
+					escaped := regexp.QuoteMeta(quotedValueNorm)
+					pattern := `(?i)\b` + escaped + `\b`
+					matched, _ := regexp.MatchString(pattern, expectedTextNorm)
+					if matched {
+						collision = true
+					}
+				} else {
+					// Contains normal
+					if strings.Contains(expectedTextNorm, quotedValueNorm) {
+						collision = true
+					}
+				}
+
+				if collision {
+					return fmt.Errorf("Erro 403 BLOCKED: O trecho a ser substituído contém o comentário não resolvido ('%s'). Instrução OBRIGATÓRIA: Use a tool resolve_comment ou reply_to_comment com o ID %s para liberar a área antes de tentar sobrescrever o texto novamente.", quotedValue, c.Id)
+				}
+			}
+		}
+
+		if result.NextPageToken == "" {
+			break
+		}
+		pageToken = result.NextPageToken
+	}
+
+	return nil
 }

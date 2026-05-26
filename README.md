@@ -22,7 +22,7 @@ Tudo isso encapsulado em um **único executável**, eliminando a necessidade de 
 
 ## ✨ Arsenal de Ferramentas Disponíveis
 
-Diferente de versões anteriores, o servidor hoje conta com um portfólio robusto de **11 ferramentas avançadas** para maximizar o fluxo de edição da IA:
+Diferente de versões anteriores, o servidor hoje conta com um portfólio robusto de **12 ferramentas avançadas** para maximizar o fluxo de edição da IA:
 
 ### 📖 Descoberta e Leitura
 
@@ -39,8 +39,9 @@ Diferente de versões anteriores, o servidor hoje conta com um portfólio robust
 
 ### ✏️ Escrita e Sincronização
 
-- **`replace_text_in_doc`**: Realiza a substituição de termos de texto no documento. Permite informar o parâmetro `occurrence_index` para alterar uma ocorrência específica (ex: 0 para a primeira ocorrência, 1 para a segunda). Se definido como -1 ou omitido, realiza a substituição de todas as correspondências encontradas.
-- **`multi_replace_doc_block`**: Aplica em lote substituições cirúrgicas de texto em índices absolutos de caracteres. Requer validação exata do texto esperado (`expected_text`) em cada intervalo informado. Executa as alterações de trás para frente no documento para neutralizar o deslocamento de índices (*offset shift*) durante a operação.
+- **`apply_text_style`**: Use esta ferramenta para aplicar estilos em palavras específicas após encontrar seus índices com `search_in_doc`. Não apaga texto e preserva comentários.
+- **`search_and_replace_text`**: Usada apenas para correções ortográficas rápidas e troca global de termos. Procura e substitui ocorrências exatas de texto globalmente no Google Docs.
+- **`update_block_by_index`**: Ferramenta determinística para aplicar formatação ABNT baseada em JSON. Substitui um bloco exato por uma lista de trechos de texto estruturados, com suporte a estilos ricos (negrito, itálico) e parágrafos (`HEADING_1`, `NORMAL_TEXT`).
 - **`update_local_latex`**: Reescreve o conteúdo de um arquivo `.tex` local no disco. Cria automaticamente um backup (`.bak`) do original antes de sobrescrever. Por segurança, aceita APENAS arquivos com extensão `.tex`. Parâmetros: - `filepath`: Caminho absoluto do arquivo `.tex` (ex: `C:/Users/.../main.tex`) - `new_content`: O conteúdo LaTeX completo que será escrito no arquivo.
 - **`sync_pdf_to_drive`**: Faz o upload do PDF compilado sobrescrevendo os bytes de um arquivo existente. Esta ferramenta não cria arquivos. O LLM deve extrair o ID do PDF usando a ferramenta `list_available_documents` e usá-lo no parâmetro `target_pdf_file_id`.
 
@@ -53,6 +54,7 @@ Diferente de versões anteriores, o servidor hoje conta com um portfólio robust
 ### Passo 1: Obter o Executável
 
 Acesse a aba [**Releases**](https://github.com/JGustavoCN/mcp-gdocs-latex/releases) e faça o download da versão compatível com a sua máquina:
+
 - 🪟 Windows: `mcp-tcc.exe`
 - 🐧 Linux: `mcp-tcc-linux`
 - 🍎 macOS: `mcp-tcc-darwin`

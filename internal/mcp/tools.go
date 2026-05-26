@@ -24,8 +24,9 @@ func RegisterTools(s *server.MCPServer) {
 	registerListDocComments(s)
 	registerReplyToComment(s)
 	registerResolveComment(s)
-	registerReplaceTextInDoc(s)
-	registerMultiReplaceDocBlock(s)
+	registerApplyTextStyle(s)
+	registerSearchAndReplaceText(s)
+	registerUpdateBlockByIndex(s)
 	registerSyncPDFToDrive(s)
 	registerUpdateLocalLatex(s)
 }
@@ -312,10 +313,10 @@ func handleResolveComment(ctx context.Context, request mcplib.CallToolRequest) (
 
 // ─── Tool 8: replace_text_in_doc (Cirúrgico) ────────────────────────────────
 
-func registerReplaceTextInDoc(s *server.MCPServer) {
-	tool := mcplib.NewTool("replace_text_in_doc",
+func registerSearchAndReplaceText(s *server.MCPServer) {
+	tool := mcplib.NewTool("search_and_replace_text",
 		mcplib.WithDescription(
-			"Realiza a substituição de termos de texto no documento. Permite informar o parâmetro 'occurrence_index' para alterar uma ocorrência específica (ex: 0 para a primeira ocorrência, 1 para a segunda). Se definido como -1 ou omitido, realiza a substituição de todas as correspondências encontradas."),
+			"Usada apenas para correções ortográficas rápidas e troca global de termos. Procura e substitui ocorrências exatas de texto globalmente no Google Docs."),
 		mcplib.WithString("document_url_or_id",
 			mcplib.Required(),
 			mcplib.Description("URL completa do Google Docs ou apenas o ID do documento"),
@@ -328,15 +329,12 @@ func registerReplaceTextInDoc(s *server.MCPServer) {
 			mcplib.Required(),
 			mcplib.Description("O novo texto que substituirá o antigo"),
 		),
-		mcplib.WithInteger("occurrence_index",
-			mcplib.Description("Índice da ocorrência a substituir (0 = primeira, 1 = segunda, etc). Se -1, substitui todas."),
-		),
 	)
-	s.AddTool(tool, handleReplaceTextInDoc)
-	log.Println("[INFO] Ferramenta registrada: replace_text_in_doc")
+	s.AddTool(tool, handleSearchAndReplaceText)
+	log.Println("[INFO] Ferramenta registrada: search_and_replace_text")
 }
 
-func handleReplaceTextInDoc(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func handleSearchAndReplaceText(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	input, err := request.RequireString("document_url_or_id")
 	if err != nil {
 		return mcplib.NewToolResultError("Parâmetro 'document_url_or_id' é obrigatório."), nil
@@ -352,62 +350,56 @@ func handleReplaceTextInDoc(ctx context.Context, request mcplib.CallToolRequest)
 		return mcplib.NewToolResultError("Parâmetro 'new_text' é obrigatório."), nil
 	}
 
-	// occurrence_index é opcional, se não enviado, é -1
-	occIndex := request.GetInt("occurrence_index", -1)
-
 	docID, err := gdocs.ExtractAndValidateDocID(ctx, input)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
 	}
 
-	log.Printf("[INFO] replace_text_in_doc → doc: %s | substituir: '%s' → '%s' (ocorrência: %d)",
-		docID, oldText, newText, occIndex)
+	log.Printf("[INFO] search_and_replace_text → doc: %s | substituir: '%s' → '%s'",
+		docID, oldText, newText)
 
-	result, err := gdocs.ReplaceTextInDoc(ctx, docID, oldText, newText, occIndex)
+	result, err := gdocs.SearchAndReplaceText(ctx, docID, oldText, newText)
 	if err != nil {
-		log.Printf("[ERRO] replace_text_in_doc: %v", err)
+		log.Printf("[ERRO] search_and_replace_text: %v", err)
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
 	}
 
 	return mcplib.NewToolResultText(result), nil
 }
 
-// ─── Tool 5: multi_replace_doc_block ────────────────────────────────────────
+// ─── Tool 5: update_block_by_index ──────────────────────────────────────────
 
-func registerMultiReplaceDocBlock(s *server.MCPServer) {
-	tool := mcplib.NewTool("multi_replace_doc_block",
+func registerUpdateBlockByIndex(s *server.MCPServer) {
+	tool := mcplib.NewTool("update_block_by_index",
 		mcplib.WithDescription(
-			"Aplica em lote substituições cirúrgicas de texto em índices absolutos de caracteres. Requer validação exata do texto esperado (expected_text) em cada intervalo informado. Executa as alterações de trás para frente no documento para neutralizar o deslocamento de índices (offset shift) durante a operação."),
+			"Ferramenta determinística para aplicar formatação ABNT baseada em JSON. Substitui um bloco exato por uma lista de trechos de texto estruturados, com suporte a estilos ricos (negrito, itálico) e parágrafos (HEADING_1, NORMAL_TEXT)."),
 		mcplib.WithString("document_url_or_id",
 			mcplib.Required(),
 			mcplib.Description("URL completa do Google Docs ou apenas o ID do documento"),
 		),
-		// MCP-GO API requires chunks to be an array, but the SDK may not fully expose WithArray nicely without custom schemas.
-		// We can define it as an object that contains an array, or a stringified JSON.
-		// Let's use a string argument for the JSON chunks to ensure wide compatibility with the Go SDK.
-		mcplib.WithString("chunks_json",
+		mcplib.WithString("payload_json",
 			mcplib.Required(),
-			mcplib.Description("JSON array stringified com blocos: [{'start_index': 10, 'end_index': 15, 'expected_text': 'abc', 'replacement_text': 'def'}]"),
+			mcplib.Description("String JSON contendo {start_index, end_index, expected_text, content: [{text, paragraph_style, text_style}]}"),
 		),
 	)
-	s.AddTool(tool, handleMultiReplaceDocBlock)
-	log.Println("[INFO] Ferramenta registrada: multi_replace_doc_block")
+	s.AddTool(tool, handleUpdateBlockByIndex)
+	log.Println("[INFO] Ferramenta registrada: update_block_by_index")
 }
 
-func handleMultiReplaceDocBlock(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func handleUpdateBlockByIndex(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	input, err := request.RequireString("document_url_or_id")
 	if err != nil {
 		return mcplib.NewToolResultError("Parâmetro 'document_url_or_id' é obrigatório."), nil
 	}
 
-	chunksJSON, err := request.RequireString("chunks_json")
+	payloadJSON, err := request.RequireString("payload_json")
 	if err != nil {
-		return mcplib.NewToolResultError("Parâmetro 'chunks_json' é obrigatório."), nil
+		return mcplib.NewToolResultError("Parâmetro 'payload_json' é obrigatório."), nil
 	}
 
-	var chunks []gdocs.Chunk
-	if err := json.Unmarshal([]byte(chunksJSON), &chunks); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: Falha ao fazer parse do chunks_json: %v", err)), nil
+	var req gdocs.ReplaceRequest
+	if err := json.Unmarshal([]byte(payloadJSON), &req); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: Falha ao fazer parse do payload_json: %v", err)), nil
 	}
 
 	docID, err := gdocs.ExtractAndValidateDocID(ctx, input)
@@ -415,11 +407,71 @@ func handleMultiReplaceDocBlock(ctx context.Context, request mcplib.CallToolRequ
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
 	}
 
-	log.Printf("[INFO] multi_replace_doc_block → doc: %s | chunks: %d", docID, len(chunks))
+	log.Printf("[INFO] update_block_by_index → doc: %s", docID)
 
-	result, err := gdocs.MultiReplaceDocBlock(ctx, docID, chunks)
+	result, err := gdocs.UpdateBlockByIndex(ctx, docID, req)
 	if err != nil {
-		log.Printf("[ERRO] multi_replace_doc_block: %v", err)
+		log.Printf("[ERRO] update_block_by_index: %v", err)
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	}
+
+	return mcplib.NewToolResultText(result), nil
+}
+
+// ─── Tool 11: apply_text_style ───────────────────────────────────────────────
+
+func registerApplyTextStyle(s *server.MCPServer) {
+	tool := mcplib.NewTool("apply_text_style",
+		mcplib.WithDescription(
+			"Use esta ferramenta para aplicar estilos em palavras específicas após encontrar seus índices com search_in_doc. Não apaga texto e preserva comentários."),
+		mcplib.WithString("document_url_or_id",
+			mcplib.Required(),
+			mcplib.Description("URL completa do Google Docs ou apenas o ID do documento"),
+		),
+		mcplib.WithInteger("start_index",
+			mcplib.Required(),
+			mcplib.Description("Índice de início"),
+		),
+		mcplib.WithInteger("end_index",
+			mcplib.Required(),
+			mcplib.Description("Índice de fim"),
+		),
+		mcplib.WithString("style",
+			mcplib.Required(),
+			mcplib.Description("Estilo a ser aplicado. Valores suportados: BOLD, ITALIC, NONE"),
+		),
+	)
+	s.AddTool(tool, handleApplyTextStyle)
+	log.Println("[INFO] Ferramenta registrada: apply_text_style")
+}
+
+func handleApplyTextStyle(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	input, err := request.RequireString("document_url_or_id")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'document_url_or_id' é obrigatório."), nil
+	}
+	
+	startIndex := request.GetInt("start_index", -1)
+	endIndex := request.GetInt("end_index", -1)
+	if startIndex < 0 || endIndex < 0 || startIndex >= endIndex {
+		return mcplib.NewToolResultError("Parâmetros 'start_index' e 'end_index' devem ser válidos e maiores que zero (com start_index < end_index)."), nil
+	}
+
+	style, err := request.RequireString("style")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'style' é obrigatório."), nil
+	}
+
+	docID, err := gdocs.ExtractAndValidateDocID(ctx, input)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	}
+
+	log.Printf("[INFO] apply_text_style → doc: %s | [%d-%d] | style: %s", docID, startIndex, endIndex, style)
+
+	result, err := gdocs.ApplyTextStyle(ctx, docID, int64(startIndex), int64(endIndex), style)
+	if err != nil {
+		log.Printf("[ERRO] apply_text_style: %v", err)
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
 	}
 
