@@ -3,28 +3,15 @@ package gdocs
 import (
 	"context"
 	"fmt"
-	"os"
-
-	"google.golang.org/api/drive/v3"
 )
 
+// SyncPDFToDrive atualiza o PDF compilado no Google Drive com verificação idempotente de hash MD5 e preservação de histórico
 func SyncPDFToDrive(ctx context.Context, fileID string, localPDFPath string) (string, error) {
-	svc, err := GetDriveService(ctx)
+	report, err := SynchronizePDF(ctx, localPDFPath, fileID)
 	if err != nil {
-		return "", fmt.Errorf("erro ao obter serviço do Drive: %w", err)
+		return "", err
 	}
 
-	file, err := os.Open(localPDFPath)
-	if err != nil {
-		return "", fmt.Errorf("erro ao abrir PDF local: %w", err)
-	}
-	defer file.Close()
-
-	// Faz APENAS o update da mídia no ID fornecido
-	_, err = svc.Files.Update(fileID, &drive.File{}).Media(file).Do()
-	if err != nil {
-		return "", fmt.Errorf("erro ao atualizar o PDF no Drive: %w", err)
-	}
-
-	return fmt.Sprintf("SUCESSO: PDF atualizado silenciosamente no ID %s", fileID), nil
+	return fmt.Sprintf("SUCESSO [%s]: %s (MD5: %s | Tamanho: %d bytes)",
+		report.Status, report.Message, report.LocalMD5, report.SizeBytes), nil
 }

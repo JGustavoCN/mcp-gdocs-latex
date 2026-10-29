@@ -4,7 +4,7 @@
 # MCP TCC — Google Docs ↔ LaTeX Bridge
 
   <p>
-    <img alt="Go Version" src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge&logo=go">
+    <img alt="Go Version" src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go">
     <img alt="MCP Protocol" src="https://img.shields.io/badge/MCP-Protocol-blueviolet?style=for-the-badge">
     <img alt="License" src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge">
   </p>
@@ -22,7 +22,7 @@ Tudo isso encapsulado em um **único executável**, eliminando a necessidade de 
 
 ## ✨ Arsenal de Ferramentas Disponíveis
 
-Diferente de versões anteriores, o servidor hoje conta com um portfólio robusto de **12 ferramentas avançadas** para maximizar o fluxo de edição da IA:
+O servidor conta com um portfólio robusto de **18 ferramentas avançadas** para maximizar o fluxo de edição da IA e garantir conformidade acadêmica com a ABNT:
 
 ### 📖 Descoberta e Leitura
 
@@ -33,17 +33,32 @@ Diferente de versões anteriores, o servidor hoje conta com um portfólio robust
 
 ### 💬 Interação Acadêmica (Comentários)
 
-- **`list_doc_comments`**: Lista todos os comentários de um arquivo no Google Drive, incluindo o trecho de texto original ao qual cada comentário está ancorado. Ideal para capturar correções e sugestões do orientador. Aceita tanto o ID puro do documento quanto a URL completa do Google Docs. O ID do Google Docs é o mesmo usado no Google Drive.
+- **`list_doc_comments`**: Lista todos os comentários de um arquivo no Google Drive, incluindo o trecho de texto original ao qual cada comentário está ancorado. Ideal para capturar correções e sugestões do orientador.
 - **`reply_to_comment`**: Adiciona uma resposta a um comentário existente no Google Docs via Drive API.
 - **`resolve_comment`**: Marca um comentário como resolvido no Google Docs via Drive API.
 
-### ✏️ Escrita e Sincronização
+### 📐 Formatação e Normas ABNT (NBR 14724 & NBR 6023)
 
-- **`apply_text_style`**: Use esta ferramenta para aplicar estilos em palavras específicas após encontrar seus índices com `search_in_doc`. Não apaga texto e preserva comentários.
-- **`search_and_replace_text`**: Usada apenas para correções ortográficas rápidas e troca global de termos. Procura e substitui ocorrências exatas de texto globalmente no Google Docs.
-- **`update_block_by_index`**: Ferramenta determinística para aplicar formatação ABNT baseada em JSON. Substitui um bloco exato por uma lista de trechos de texto estruturados, com suporte a estilos ricos (negrito, itálico) e parágrafos (`HEADING_1`, `NORMAL_TEXT`).
-- **`update_local_latex`**: Reescreve o conteúdo de um arquivo `.tex` local no disco. Cria automaticamente um backup (`.bak`) do original antes de sobrescrever. Por segurança, aceita APENAS arquivos com extensão `.tex`. Parâmetros: - `filepath`: Caminho absoluto do arquivo `.tex` (ex: `C:/Users/.../main.tex`) - `new_content`: O conteúdo LaTeX completo que será escrito no arquivo.
-- **`sync_pdf_to_drive`**: Faz o upload do PDF compilado sobrescrevendo os bytes de um arquivo existente. Esta ferramenta não cria arquivos. O LLM deve extrair o ID do PDF usando a ferramenta `list_available_documents` e usá-lo no parâmetro `target_pdf_file_id`.
+- **`apply_abnt_page_margins`**: Configura instantaneamente as margens ABNT oficiais na página A4 (Superior: 3 cm, Esquerda: 3 cm, Inferior: 2 cm, Direita: 2 cm) via `UpdateDocumentStyleRequest`.
+- **`replace_block_abnt`**: Substitui blocos textuais aplicando a sequência canônica anti-bleeding (elimina o efeito cascata de negrito e a proliferação de marcadores de lista/bullets vazios), redefinindo o estilo para `NORMAL_TEXT`, texto justificado, entrelinhas 1,5 e recuo de 1ª linha de 1,25 cm (`35.433 pt`).
+- **`format_document_abnt`**: Varre o documento ou uma faixa de índices específica e aplica em lote a padronização ABNT (justificação, entrelinhas 1,5, recuo 1,25 cm e margens opcionais).
+
+### 📊 Tabelas Nativas e Diagramas Visuais
+
+- **`insert_native_table`**: Converte e insere tabelas nativas no Google Docs segundo o padrão acadêmico IBGE/ABNT (sem bordas verticais, topo e fundo sólidos, cabeçalho em negrito, legenda no topo e fonte no rodapé). Aceita código LaTeX puro (`\begin{tabular}...`) ou JSON estruturado.
+- **`insert_mermaid_diagram`**: Processa diagramas conceituais Mermaid como imagens PNG em alta resolução com enquadramento de aspect ratio em **2D Bounding Box** (máximo 450x620 pt), upload para o Drive, injeção inline no Docs e fallback automático para Deep Link caso haja restrição DLP.
+
+### 🔒 Integridade Criptográfica e Sincronização de PDF
+
+- **`check_pdf_sync`**: Compara o hash MD5 calculado por streaming do PDF compilado local (`resources/tcc/main.pdf`) com o campo `md5Checksum` da Google Drive API v3, com verificação prévia de integridade ISO 32000-1 (`%%EOF`) e blindagem contra concorrência TOCTOU.
+- **`sync_pdf_to_drive`**: Sincronização idempotente de PDF para o Google Drive. Se o hash MD5 local coincidir com o da nuvem, suprime o upload desnecessário (`IN_SYNC`). Se divergente, realiza o upload com retenção permanente de histórico de revisões (`keepRevisionForever: true`).
+
+### ✏️ Edição Legada e Manutenção Local
+
+- **`apply_text_style`**: Aplica cirurgicamente estilos (negrito, itálico) em intervalos de caracteres sem alterar o texto ou comentários.
+- **`search_and_replace_text`**: Substituição de termos globais para correções pontuais.
+- **`update_block_by_index`**: Substituição estruturada baseada em blocos JSON com suporte a normalização estrita de `NORMAL_TEXT`.
+- **`update_local_latex`**: Reescreve o conteúdo de arquivos `.tex` locais no disco, gerando automaticamente backup de segurança (`.bak`).
 
 > **💡 Dica de Ouro:** As ferramentas que exigem o documento aceitam tranquilamente a **URL completa do seu Docs** ou apenas o **ID**. A IA e o servidor lidam com a extração!
 
@@ -126,7 +141,7 @@ A segurança do seu trabalho é vital. Por padrão, a IA acessa qualquer Docs co
 
 ## 🛠️ Para Desenvolvedores (Construindo o Projeto)
 
-Se deseja estender o comportamento do servidor ou inspecionar a robusta implementação de cálculo de limites UTF-16, a compilação local é super fácil. Requer [Go 1.25+](https://go.dev/dl/).
+Requer [Go 1.25+](https://go.dev/dl/).
 
 ```bash
 # Clone e entre no repositório
@@ -136,44 +151,18 @@ cd mcp-gdocs-latex
 # Sincronize módulos
 go mod tidy
 
-# O Makefile facilita os builds:
+# Execução de testes automatizados (unitários de ABNT, UTF-16, tabelas e hash MD5)
+go test -v ./...
+
+# Execução do Validador E2E do TCC (Varre 22 tabelas LaTeX, 4 diagramas e main.pdf)
+go run ./cmd/validator
+
+# Compilação dos binários:
 make build           # Build para seu SO atual
 make build-windows   # Cross-compile para Windows (bin/mcp-tcc.exe)
 make build-linux     # Cross-compile para Linux (bin/mcp-tcc-linux)
 make build-mac       # Cross-compile para macOS (bin/mcp-tcc-darwin)
 ```
-
-### Estrutura do Código
-
-```text
-├── cmd/mcp-server/main.go      → Entrypoint central do protocolo stdio
-├── internal/
-│   ├── gdocs/                  → Submódulo de interação via Docs e Drive APIs
-│   │   ├── auth.go             → Thread-safe Singletons para autenticação (Service Account)
-│   │   ├── reader.go           → Leitura segmentada, paginação e parse Markdown estrutural
-│   │   ├── writer.go           → Escrita no Google Doc (batchUpdate com Offset Shift Protection)
-│   │   ├── comments.go         → Busca, resposta e resolução de comentários
-│   │   ├── validator.go        → Extração autônoma de IDs (Regex) e bloqueio de Allowlist
-│   │   └── listing.go          → Varredura via Drive API das permissões ativas
-│   ├── mcp/
-│   │   └── tools.go            → Registry das 10 ferramentas no Server do SDK
-│   └── latex/
-│       └── local_file.go       → Gravação e fallback dinâmico (Backup .bak) em disco local
-└── Makefile                    → Recipes para build otimizado
-```
-
----
-
-## ❓ FAQ (Perguntas Frequentes)
-
-**P: Eu preciso instalar o Go (Golang) para que a IA funcione?**
-R: **De jeito nenhum!** Baixe o executável pronto das Releases. O Go é apenas para desenvolvedores de software que desejam recompilar a fonte.
-
-**P: Minhas chaves e dados do Google Docs estão seguros?**
-R: Sim! O código fonte é público. Toda comunicação é feita unicamente entre o executável rodando na *sua* máquina e a infraestrutura oficial do Google APIs (utilizando a *sua* conta de serviço).
-
-**P: A IA vai sobrescrever meu arquivo local `.tex` e jogar fora o conteúdo antigo?**
-R: Toda vez que a ferramenta `update_local_latex` for invocada, o servidor MCP fará proativamente uma cópia em backup (ex: `main.tex.bak`) com o conteúdo antigo, antes de introduzir as novas formatações.
 
 ---
 

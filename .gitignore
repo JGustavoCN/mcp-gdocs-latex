@@ -47,3 +47,4 @@ Thumbs.db
 
 # --- Servidor Python legado (opcional: remova se quiser manter) ---
 # server_tcc.py
+resources/

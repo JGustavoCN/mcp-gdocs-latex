@@ -289,7 +289,7 @@ func UpdateBlockByIndex(ctx context.Context, documentID string, req ReplaceReque
 			},
 		})
 
-		if bloco.ParagraphStyle != "NORMAL_TEXT" && bloco.ParagraphStyle != "" {
+		if bloco.ParagraphStyle != "" {
 			requests = append(requests, &docs.Request{
 				UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
 					Range: &docs.Range{
