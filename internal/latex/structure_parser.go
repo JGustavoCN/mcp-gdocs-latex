@@ -169,3 +169,89 @@ func ScanTCCStructure(tccBaseDir string) ([]LatexElement, error) {
 
 	return allElements, nil
 }
+
+// KnownSectionInfo detalha uma seção mapeada do TCC com numeração ABNT e nível hierárquico
+type KnownSectionInfo struct {
+	Level         int                   `json:"level"`          // 1 (Chapter), 2 (Section), 3 (Subsection), 4 (Subsubsection)
+	TargetHeading string                `json:"target_heading"` // HEADING_1, HEADING_2, HEADING_3, HEADING_4
+	Number        string                `json:"number"`         // "1", "1.1", "1.4.1"
+	Title         string                `json:"title"`          // "Contextualização"
+	FullABNTTitle string                `json:"full_abnt_title"`// "1.1 CONTEXTUALIZAÇÃO" ou "1.4.1 Objetivo Geral"
+	Type          StructuralElementType `json:"type"`
+	File          string                `json:"file"`
+}
+
+// GetNumberedTCCStructure calcula a numeração progressiva ABNT (NBR 6024) para todas as seções mapeadas do TCC
+func GetNumberedTCCStructure(tccBaseDir string) ([]KnownSectionInfo, error) {
+	elements, err := ScanTCCStructure(tccBaseDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []KnownSectionInfo
+	chapNum := 0
+	secNum := 0
+	subsecNum := 0
+	subsubsecNum := 0
+
+	for _, el := range elements {
+		switch el.Type {
+		case ElementChapter:
+			chapNum++
+			secNum = 0
+			subsecNum = 0
+			subsubsecNum = 0
+			numStr := fmt.Sprintf("%d", chapNum)
+			result = append(result, KnownSectionInfo{
+				Level:         1,
+				TargetHeading: "HEADING_1",
+				Number:        numStr,
+				Title:         el.Title,
+				FullABNTTitle: fmt.Sprintf("%s %s", numStr, strings.ToUpper(el.Title)),
+				Type:          el.Type,
+				File:          el.File,
+			})
+		case ElementSection:
+			secNum++
+			subsecNum = 0
+			subsubsecNum = 0
+			numStr := fmt.Sprintf("%d.%d", chapNum, secNum)
+			result = append(result, KnownSectionInfo{
+				Level:         2,
+				TargetHeading: "HEADING_2",
+				Number:        numStr,
+				Title:         el.Title,
+				FullABNTTitle: fmt.Sprintf("%s %s", numStr, strings.ToUpper(el.Title)),
+				Type:          el.Type,
+				File:          el.File,
+			})
+		case ElementSubsection:
+			subsecNum++
+			subsubsecNum = 0
+			numStr := fmt.Sprintf("%d.%d.%d", chapNum, secNum, subsecNum)
+			result = append(result, KnownSectionInfo{
+				Level:         3,
+				TargetHeading: "HEADING_3",
+				Number:        numStr,
+				Title:         el.Title,
+				FullABNTTitle: fmt.Sprintf("%s %s", numStr, el.Title),
+				Type:          el.Type,
+				File:          el.File,
+			})
+		case ElementSubsubsection:
+			subsubsecNum++
+			numStr := fmt.Sprintf("%d.%d.%d.%d", chapNum, secNum, subsecNum, subsubsecNum)
+			result = append(result, KnownSectionInfo{
+				Level:         4,
+				TargetHeading: "HEADING_4",
+				Number:        numStr,
+				Title:         el.Title,
+				FullABNTTitle: fmt.Sprintf("%s %s", numStr, el.Title),
+				Type:          el.Type,
+				File:          el.File,
+			})
+		}
+	}
+
+	return result, nil
+}

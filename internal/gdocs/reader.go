@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/JGustavoCN/mcp-gdocs-latex/internal/latex"
 	"google.golang.org/api/docs/v1"
 )
 
@@ -22,17 +23,35 @@ var headingMap = map[string]string{
 	"SUBTITLE":  "## ",
 }
 
-// SkeletonItem representa um título ou trecho destacado no documento.
+// SkeletonItem representa um título ou tópico identificado no documento Google Docs
 type SkeletonItem struct {
-	Text       string `json:"text"`
-	Style      string `json:"style"`
-	Level      int    `json:"level,omitempty"`
-	StartIndex int64  `json:"start_index"`
-	EndIndex   int64  `json:"end_index"`
+	Text         string `json:"text"`
+	CurrentStyle string `json:"current_style"`
+	TargetStyle  string `json:"target_style,omitempty"`
+	Level        int    `json:"level,omitempty"`
+	StartIndex   int64  `json:"start_index"`
+	EndIndex     int64  `json:"end_index"`
 }
 
-// GetDocSkeleton retorna um "Raio-X" do documento (apenas títulos e highlights).
-func GetDocSkeleton(ctx context.Context, documentID string) (string, error) {
+// StructuralComparison condensa o confronto entre o Docs e o Template/LaTeX
+type StructuralComparison struct {
+	MatchedSections []string      `json:"matched_sections"`
+	MissingInDoc    []string      `json:"missing_in_doc"`
+	Anomalies       []AnomalyItem `json:"anomalies,omitempty"`
+	Recommendations []string      `json:"recommendations,omitempty"`
+}
+
+// DocSkeletonReport representa o retorno unificado de raio-X e comparação estrutural
+type DocSkeletonReport struct {
+	DocumentTitle        string                `json:"document_title"`
+	TotalElements        int                   `json:"total_elements"`
+	DocSkeleton          []SkeletonItem        `json:"doc_skeleton"`
+	TemplateSkeleton     []latex.LatexElement  `json:"template_skeleton,omitempty"`
+	StructuralComparison *StructuralComparison `json:"structural_comparison,omitempty"`
+}
+
+// GetDocSkeleton retorna o Raio-X hierárquico do Google Docs unificado com a comparação do Template/LaTeX
+func GetDocSkeleton(ctx context.Context, documentID string, referenceTemplateDir ...string) (string, error) {
 	svc, err := GetDocsService(ctx)
 	if err != nil {
 		return "", fmt.Errorf("erro ao obter serviço do Docs: %w", err)
@@ -44,67 +63,146 @@ func GetDocSkeleton(ctx context.Context, documentID string) (string, error) {
 	}
 
 	if doc.Body == nil {
-		return "[]", nil
+		return "{}", nil
 	}
 
-	var skeleton []SkeletonItem
+	report := &DocSkeletonReport{
+		DocumentTitle: doc.Title,
+		TotalElements: len(doc.Body.Content),
+	}
 
-	var traverse func(elements []*docs.StructuralElement)
-	traverse = func(elements []*docs.StructuralElement) {
-		for _, el := range elements {
-			if el.Paragraph != nil {
-				style := ""
-				if el.Paragraph.ParagraphStyle != nil {
-					style = el.Paragraph.ParagraphStyle.NamedStyleType
+	var anomalies []AnomalyItem
+
+	// 1. Mapeia títulos existentes e detecta anomalias estruturais
+	for _, el := range doc.Body.Content {
+		if el.Paragraph != nil {
+			p := el.Paragraph
+			styleName := "NORMAL_TEXT"
+			if p.ParagraphStyle != nil && p.ParagraphStyle.NamedStyleType != "" {
+				styleName = p.ParagraphStyle.NamedStyleType
+			}
+
+			var textBuilder strings.Builder
+			for _, pEl := range p.Elements {
+				if pEl.TextRun != nil {
+					textBuilder.WriteString(pEl.TextRun.Content)
+				}
+			}
+
+			trimmed := strings.TrimSpace(textBuilder.String())
+			if trimmed == "" {
+				continue
+			}
+
+			// Detecção de comandos LaTeX vazados
+			if matches := regexLatexLeakCmd.FindAllStringIndex(trimmed, -1); len(matches) > 0 {
+				anomalies = append(anomalies, AnomalyItem{
+					Type:        "LEAKED_COMMAND",
+					Description: "Comando LaTeX vazado em texto puro",
+					StartIndex:  el.StartIndex,
+					EndIndex:    el.EndIndex,
+					Snippet:     trimmed,
+				})
+			}
+
+			isHeading := strings.Contains(styleName, "HEADING") || styleName == "TITLE"
+
+			targetStyle := styleName
+			level := 0
+			if isHeading {
+				if styleName == "TITLE" {
+					level = 1
+				} else if strings.HasPrefix(styleName, "HEADING_") {
+					fmt.Sscanf(styleName, "HEADING_%d", &level)
+				}
+			} else {
+				// Detecta se é um título não estilizado (em NORMAL_TEXT)
+				if regexPrimaryHeading.MatchString(trimmed) {
+					targetStyle = "HEADING_1"
+					level = 1
+				} else if regexSecondaryHeading.MatchString(trimmed) {
+					targetStyle = "HEADING_2"
+					level = 2
+				} else if regexTertiaryHeading.MatchString(trimmed) {
+					targetStyle = "HEADING_3"
+					level = 3
 				}
 
-				isHeading := strings.Contains(style, "HEADING") || style == "TITLE"
-				hasHighlight := false
-
-				var textBuilder strings.Builder
-				for _, pEl := range el.Paragraph.Elements {
-					if pEl.TextRun != nil {
-						textBuilder.WriteString(pEl.TextRun.Content)
-						if pEl.TextRun.TextStyle != nil && pEl.TextRun.TextStyle.BackgroundColor != nil {
-							hasHighlight = true
-						}
-					}
-				}
-
-				text := strings.TrimSpace(textBuilder.String())
-				if text != "" && (isHeading || hasHighlight) {
-					displayStyle := style
-					level := 0
-					if !isHeading && hasHighlight {
-						displayStyle = "HIGHLIGHT"
-					} else if isHeading {
-						if style == "TITLE" {
-							level = 1
-						} else if strings.HasPrefix(style, "HEADING_") {
-							fmt.Sscanf(style, "HEADING_%d", &level)
-						}
-					}
-					skeleton = append(skeleton, SkeletonItem{
-						Text:       text,
-						Style:      displayStyle,
-						Level:      level,
-						StartIndex: el.StartIndex,
-						EndIndex:   el.EndIndex,
+				if targetStyle != styleName {
+					anomalies = append(anomalies, AnomalyItem{
+						Type:        "UNSTYLED_HEADING",
+						Description: fmt.Sprintf("Título '%s' está com estilo %s em vez de %s", trimmed, styleName, targetStyle),
+						StartIndex:  el.StartIndex,
+						EndIndex:    el.EndIndex,
+						Snippet:     trimmed,
 					})
 				}
-			} else if el.Table != nil {
-				for _, row := range el.Table.TableRows {
-					for _, cell := range row.TableCells {
-						traverse(cell.Content)
-					}
-				}
+			}
+
+			if isHeading || targetStyle != styleName {
+				report.DocSkeleton = append(report.DocSkeleton, SkeletonItem{
+					Text:         trimmed,
+					CurrentStyle: styleName,
+					TargetStyle:  targetStyle,
+					Level:        level,
+					StartIndex:   el.StartIndex,
+					EndIndex:     el.EndIndex,
+				})
 			}
 		}
 	}
 
-	traverse(doc.Body.Content)
+	// 2. Confronto opcional com o Template / TCC de referência
+	refDir := "resources/tcc"
+	if len(referenceTemplateDir) > 0 && referenceTemplateDir[0] != "" {
+		refDir = referenceTemplateDir[0]
+	}
 
-	b, err := json.MarshalIndent(skeleton, "", "  ")
+	refElements, errRef := latex.ScanTCCStructure(refDir)
+	if errRef == nil && len(refElements) > 0 {
+		report.TemplateSkeleton = refElements
+
+		comp := &StructuralComparison{
+			Anomalies: anomalies,
+		}
+
+		foundTitlesMap := make(map[string]bool)
+		for _, fs := range report.DocSkeleton {
+			cleanFound := strings.ToLower(strings.TrimSpace(fs.Text))
+			foundTitlesMap[cleanFound] = true
+		}
+
+		for _, refEl := range refElements {
+			if refEl.Type == latex.ElementChapter || refEl.Type == latex.ElementSection {
+				cleanRef := strings.ToLower(strings.TrimSpace(refEl.Title))
+				found := false
+				for foundKey := range foundTitlesMap {
+					if strings.Contains(foundKey, cleanRef) || strings.Contains(cleanRef, foundKey) {
+						found = true
+						comp.MatchedSections = append(comp.MatchedSections, refEl.Title)
+						break
+					}
+				}
+				if !found {
+					comp.MissingInDoc = append(comp.MissingInDoc, fmt.Sprintf("%s (%s no arquivo %s)", refEl.Title, refEl.Type, refEl.File))
+				}
+			}
+		}
+
+		// Recomendações inteligentes
+		if len(anomalies) > 0 {
+			comp.Recommendations = append(comp.Recommendations,
+				fmt.Sprintf("Executar 'normalize_doc_structure' para promover títulos e limpar %d anomalias.", len(anomalies)))
+		}
+		if len(comp.MissingInDoc) > 0 {
+			comp.Recommendations = append(comp.Recommendations,
+				fmt.Sprintf("Usar 'sync_section_to_doc' para injetar seções faltantes (%d pendentes).", len(comp.MissingInDoc)))
+		}
+
+		report.StructuralComparison = comp
+	}
+
+	b, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("erro ao formatar JSON do skeleton: %w", err)
 	}

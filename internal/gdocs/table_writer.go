@@ -20,6 +20,21 @@ type TableInsertionResult struct {
 
 // InsertNativeTable executa o algoritmo Two-Step para inserir e estilizar uma tabela nativa ABNT no Docs
 func InsertNativeTable(ctx context.Context, documentID string, targetIndex int64, tableData latex.LaTeXTableData) (*TableInsertionResult, error) {
+	// Auto-recuperação de dimensões se não especificadas explicitamente
+	if tableData.RowsCount <= 0 && len(tableData.Data) > 0 {
+		tableData.RowsCount = int64(len(tableData.Data))
+		if len(tableData.Headers) > 0 {
+			tableData.RowsCount++
+		}
+	}
+	if tableData.ColsCount <= 0 {
+		if len(tableData.Headers) > 0 {
+			tableData.ColsCount = int64(len(tableData.Headers))
+		} else if len(tableData.Data) > 0 {
+			tableData.ColsCount = int64(len(tableData.Data[0]))
+		}
+	}
+
 	if tableData.RowsCount <= 0 || tableData.ColsCount <= 0 {
 		return nil, fmt.Errorf("tabela vazia ou com dimensões inválidas: %dx%d", tableData.RowsCount, tableData.ColsCount)
 	}

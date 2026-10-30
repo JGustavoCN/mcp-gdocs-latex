@@ -6,14 +6,22 @@ import (
 
 // Constantes métricas tipográficas ABNT (DTP Points: 1 cm = 72 / 2.54 pt ≈ 28.346 pt)
 const (
-	ABNTIndentFirstLinePt = 35.433 // 1.25 cm
-	ABNTLineSpacing       = 150    // 1.5 entrelinhas (150%)
-	ABNTMarginTopPt       = 85.039 // 3.00 cm
-	ABNTMarginLeftPt      = 85.039 // 3.00 cm
-	ABNTMarginBottomPt    = 56.693 // 2.00 cm
-	ABNTMarginRightPt     = 56.693 // 2.00 cm
-	ABNTPageWidthPt       = 595.276 // 21.00 cm (A4)
-	ABNTPageHeightPt      = 841.890 // 29.70 cm (A4)
+	ABNTDefaultFontFamily      = "Arial" // Família primária padrão ABNT NBR 14724
+	ABNTTimesFontFamily        = "Times New Roman" // Família secundária permitida ABNT
+	ABNTFontSizeBodyPt         = 12.0    // Corpo e títulos de seções (NBR 14724 / NBR 6024)
+	ABNTFontSizeCaptionPt      = 10.0    // Legendas, fontes, notas de rodapé e citações longas
+	ABNTFontSizeHeadingPt      = 12.0    // Títulos de seções na ABNT são sempre 12 pt!
+	ABNTIndentFirstLinePt      = 35.433  // 1.25 cm (recuo padrão de parágrafos de corpo)
+	ABNTIndentLongQuotePt      = 113.386 // 4.00 cm (recuo para citações diretas longas)
+	ABNTIndentPreTextualNotePt = 212.598 // 7.50 cm (recuo para nota institucional na folha de rosto)
+	ABNTLineSpacing            = 150     // 1.5 entrelinhas (150%)
+	ABNTLineSpacingSingle      = 100     // 1.0 entrelinhas simples (100%)
+	ABNTMarginTopPt            = 85.039  // 3.00 cm
+	ABNTMarginLeftPt           = 85.039  // 3.00 cm
+	ABNTMarginBottomPt         = 56.693  // 2.00 cm
+	ABNTMarginRightPt          = 56.693  // 2.00 cm
+	ABNTPageWidthPt            = 595.276 // 21.00 cm (A4)
+	ABNTPageHeightPt           = 841.890 // 29.70 cm (A4)
 )
 
 // BatchUpdateBuilder auxilia na montagem atômica e segura de lotes de requisições para a Google Docs API

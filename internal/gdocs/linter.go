@@ -3,7 +3,10 @@ package gdocs
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/googleapi"
@@ -29,6 +32,15 @@ type FontSizeAnomalyItem struct {
 	Text         string  `json:"text"`
 }
 
+// FontFamilyAnomalyItem detalha trechos com família de fonte diferente do padrão ABNT
+type FontFamilyAnomalyItem struct {
+	StartIndex     int64  `json:"start_index"`
+	EndIndex       int64  `json:"end_index"`
+	CurrentFamily  string `json:"current_family"`
+	ExpectedFamily string `json:"expected_family"`
+	Text           string `json:"text"`
+}
+
 // TextColorAnomalyItem detalha trechos com cor de texto anômala fora do preto padrão
 type TextColorAnomalyItem struct {
 	StartIndex int64  `json:"start_index"`
@@ -37,22 +49,97 @@ type TextColorAnomalyItem struct {
 	Text       string `json:"text"`
 }
 
+// OrderViolationItem detalha anomalias de ordem estrutural segundo ABNT NBR 14724 / NBR 6024
+type OrderViolationItem struct {
+	ElementIndex int    `json:"element_index"`
+	StartIndex   int64  `json:"start_index"`
+	EndIndex     int64  `json:"end_index"`
+	SectionTitle string `json:"section_title"`
+	Severity     string `json:"severity"` // "CRÍTICO" ou "ALERTA"
+	RuleViolated string `json:"rule_violated"`
+	Details      string `json:"details"`
+}
+
+// LatexLeakItem detalha vazamentos de comandos ou fórmulas LaTeX no texto
+type LatexLeakItem struct {
+	ElementIndex int    `json:"element_index"`
+	StartIndex   int64  `json:"start_index"`
+	EndIndex     int64  `json:"end_index"`
+	LeakType     string `json:"leak_type"`
+	Snippet      string `json:"snippet"`
+	Suggestion   string `json:"suggestion"`
+}
+
+// DoubleSpaceAnomalyItem detalha múltiplos espaços ou espaços antes de pontuação
+type DoubleSpaceAnomalyItem struct {
+	StartIndex int64  `json:"start_index"`
+	EndIndex   int64  `json:"end_index"`
+	IssueType  string `json:"issue_type"`
+	Snippet    string `json:"snippet"`
+}
+
+// ParagraphQualityItem detalha parágrafos curtos demais (órfãos) ou longos demais
+type ParagraphQualityItem struct {
+	ElementIndex int    `json:"element_index"`
+	StartIndex   int64  `json:"start_index"`
+	EndIndex     int64  `json:"end_index"`
+	IssueType    string `json:"issue_type"`
+	Length       int    `json:"length"`
+	Snippet      string `json:"snippet"`
+	Suggestion   string `json:"suggestion"`
+}
+
+// BulletListAnomalyItem detalha listas de marcadores que deveriam ser alíneas ABNT
+type BulletListAnomalyItem struct {
+	StartIndex       int64  `json:"start_index"`
+	EndIndex         int64  `json:"end_index"`
+	ConsecutiveCount int    `json:"consecutive_count"`
+	Snippet          string `json:"snippet"`
+	Suggestion       string `json:"suggestion"`
+}
+
 // LintReport contém os resultados da análise estrutural, tipográfica e de revisões do Google Doc
 type LintReport struct {
-	TotalElements         int                    `json:"total_elements"`
-	TotalTables           int                    `json:"total_tables"`
-	EmptyTables           []string               `json:"empty_tables,omitempty"`
-	FilledTables          []string               `json:"filled_tables,omitempty"`
-	BoldCascades          []string               `json:"bold_cascades,omitempty"`
-	ReviewHighlights      []ReviewHighlightItem  `json:"review_highlights,omitempty"`
-	FontSizeAnomalies     []FontSizeAnomalyItem  `json:"font_size_anomalies,omitempty"`
-	TextColorAnomalies    []TextColorAnomalyItem `json:"text_color_anomalies,omitempty"`
-	ConsecutiveBlankLines []string               `json:"consecutive_blank_lines,omitempty"`
-	SoftLineBreaks        []string               `json:"soft_line_breaks,omitempty"`
-	DanglingMarkers       []string               `json:"dangling_markers,omitempty"`
-	FixedAnomaliesCount   int                    `json:"fixed_anomalies_count,omitempty"`
-	Message               string                 `json:"message"`
+	TotalElements             int                      `json:"total_elements"`
+	TotalTables               int                      `json:"total_tables"`
+	EmptyTables               []string                 `json:"empty_tables,omitempty"`
+	FilledTables              []string                 `json:"filled_tables,omitempty"`
+	BoldCascades              []string                 `json:"bold_cascades,omitempty"`
+	ReviewHighlights          []ReviewHighlightItem    `json:"review_highlights,omitempty"`
+	FontSizeAnomalies         []FontSizeAnomalyItem    `json:"font_size_anomalies,omitempty"`
+	FontFamilyAnomalies       []FontFamilyAnomalyItem  `json:"font_family_anomalies,omitempty"`
+	TextColorAnomalies        []TextColorAnomalyItem   `json:"text_color_anomalies,omitempty"`
+	StructuralOrderViolations []OrderViolationItem     `json:"structural_order_violations,omitempty"`
+	MisplacedElements         []string                 `json:"misplaced_elements,omitempty"`
+	LatexSyntaxLeaks          []LatexLeakItem          `json:"latex_syntax_leaks,omitempty"`
+	DoubleSpacingAnomalies    []DoubleSpaceAnomalyItem `json:"double_spacing_anomalies,omitempty"`
+	ParagraphQualityAnomalies []ParagraphQualityItem   `json:"paragraph_quality_anomalies,omitempty"`
+	BulletListAnomalies       []BulletListAnomalyItem  `json:"bullet_list_anomalies,omitempty"`
+	ConsecutiveBlankLines     []string                 `json:"consecutive_blank_lines,omitempty"`
+	SoftLineBreaks            []string                 `json:"soft_line_breaks,omitempty"`
+	DanglingMarkers           []string                 `json:"dangling_markers,omitempty"`
+	FixedAnomaliesCount       int                      `json:"fixed_anomalies_count,omitempty"`
+	Message                   string                   `json:"message"`
 }
+
+// LintOptions configura parâmetros opcionais de auditoria e correção
+type LintOptions struct {
+	AutoFix              bool   `json:"auto_fix"`
+	ClearHighlights      bool   `json:"clear_highlights"`
+	ExpectedFontFamily   string `json:"expected_font_family"`
+	CheckStructuralOrder bool   `json:"check_structural_order"`
+	CheckLatexLeaks      bool   `json:"check_latex_leaks"`
+	CheckSpacingAndText  bool   `json:"check_spacing_and_text"`
+}
+
+var (
+	reLatexCmdInText    = regexp.MustCompile(`(?i)\\(?:chapter|section|subsection|subsubsection|label|begin|end|ref|cite|textcite|caption|centering|hline|toprule|midrule|bottomrule|textit|textbf|path|times|ge|le|neq|textordmasculine|textordfeminine)\*?(?:[{(][^})]*[})]?|\[[^\]]*\]|\{[^}]*\})?`)
+	reMathSyntaxInText  = regexp.MustCompile(`\$[^$]+\$`)
+	reDoubleSpace       = regexp.MustCompile(` {2,}`)
+	reSpaceBeforePunct  = regexp.MustCompile(`\s+([,;.:!?])`)
+	reBrokenParenthesis = regexp.MustCompile(`\)\s*\)|\(\s*\)`)
+	reChapterNumber     = regexp.MustCompile(`^([1-9][0-9]*)\s+`)
+)
 
 // classifyColor mapeia valores RGB (0.0 a 1.0) para categoria semântica e código HEX
 func classifyColor(r, g, b float64) (string, string) {
@@ -90,7 +177,7 @@ func getDocCommentsSummary(ctx context.Context, fileID string) map[string]string
 	}
 
 	for _, c := range res.Comments {
-		if c.QuotedFileContent != nil && strings.TrimSpace(c.QuotedFileContent.Value) != nilText(c.QuotedFileContent.Value) {
+		if c.QuotedFileContent != nil && strings.TrimSpace(c.QuotedFileContent.Value) != "" {
 			cleanQuoted := strings.ToLower(strings.TrimSpace(c.QuotedFileContent.Value))
 			author := "Autor"
 			if c.Author != nil && c.Author.DisplayName != "" {
@@ -103,13 +190,29 @@ func getDocCommentsSummary(ctx context.Context, fileID string) map[string]string
 	return commentMap
 }
 
-func nilText(s string) string {
-	return ""
-}
+// LintDocumentABNT executa a auditoria completa de conformidade ABNT no Google Docs
+func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clearHighlights bool, extraOpts ...LintOptions) (*LintReport, error) {
+	opts := LintOptions{
+		AutoFix:              autoFix,
+		ClearHighlights:      clearHighlights,
+		ExpectedFontFamily:   ABNTDefaultFontFamily, // "Arial"
+		CheckStructuralOrder: true,
+		CheckLatexLeaks:      true,
+		CheckSpacingAndText:  true,
+	}
 
-// LintDocumentABNT inspeciona o documento, detectando tabelas vazias, cascatas de negrito,
-// anomalias de fonte ABNT, marca-texto de revisão e comentários do orientador.
-func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clearHighlights bool) (*LintReport, error) {
+	if len(extraOpts) > 0 {
+		userOpts := extraOpts[0]
+		opts.AutoFix = autoFix || userOpts.AutoFix
+		opts.ClearHighlights = clearHighlights || userOpts.ClearHighlights
+		if userOpts.ExpectedFontFamily != "" {
+			opts.ExpectedFontFamily = userOpts.ExpectedFontFamily
+		}
+		opts.CheckStructuralOrder = userOpts.CheckStructuralOrder
+		opts.CheckLatexLeaks = userOpts.CheckLatexLeaks
+		opts.CheckSpacingAndText = userOpts.CheckSpacingAndText
+	}
+
 	docsSvc, err := GetDocsService(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao obter docs service: %w", err)
@@ -124,7 +227,6 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 		TotalElements: len(doc.Body.Content),
 	}
 
-	// Carrega comentários do Drive para correlacionar com marca-texto
 	commentsSummary := getDocCommentsSummary(ctx, documentID)
 
 	type RangeItem struct {
@@ -133,9 +235,23 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 	}
 	var emptyTableRanges []RangeItem
 	var fontFixRanges []RangeItem
+	var fontFamilyFixRanges []RangeItem
 	var highlightRanges []RangeItem
 
 	consecutiveEmptyParas := 0
+	consecutiveBullets := 0
+
+	// Máquina de estados para rastreamento da ordem canônica ABNT NBR 14724
+	type docSectionState int
+	const (
+		statePreTextual docSectionState = iota
+		stateTextual
+		statePostTextual
+	)
+	currentState := statePreTextual
+	highestChapterNum := 0
+	firstChapterIndex := -1
+	referencesIndex := -1
 
 	for i, el := range doc.Body.Content {
 		// 1. Análise de Tabelas
@@ -179,6 +295,13 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			} else {
 				report.FilledTables = append(report.FilledTables, desc+" [PREENCHIDA]")
 			}
+
+			// Se a tabela estiver posicionada dentro ou após a seção de REFERÊNCIAS
+			if opts.CheckStructuralOrder && currentState == statePostTextual {
+				report.MisplacedElements = append(report.MisplacedElements,
+					fmt.Sprintf("Elemento %d [%d-%d]: Tabela nativa posicionada indevidamente dentro da seção de REFERÊNCIAS (NBR 6023). Tabelas e ilustrações devem integrar os capítulos de desenvolvimento ou anexos/apêndices.",
+						i, el.StartIndex, el.EndIndex))
+			}
 		}
 
 		// 2. Análise de Parágrafos
@@ -216,7 +339,6 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 							colorCat, hex := classifyColor(rgb.Red, rgb.Green, rgb.Blue)
 							cleanTxt := strings.TrimSpace(txt)
 
-							// Tenta correlacionar com comentário existente
 							associatedComment := ""
 							cleanLower := strings.ToLower(cleanTxt)
 							for q, comm := range commentsSummary {
@@ -241,9 +363,7 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 						// 2.2 Detecção de Cores Anômalas de Texto (ForegroundColor != preto)
 						if ts.ForegroundColor != nil && ts.ForegroundColor.Color != nil && ts.ForegroundColor.Color.RgbColor != nil {
 							rgb := ts.ForegroundColor.Color.RgbColor
-							// Ignora se for preto (ou cinza quase preto < 0.05) e ignora quebras puras
 							if (rgb.Red > 0.15 || rgb.Green > 0.15 || rgb.Blue > 0.15) && strings.TrimSpace(txt) != "" {
-								// Verifica se não é um link azul
 								isLink := ts.Link != nil && ts.Link.Url != ""
 								if !isLink {
 									_, hex := classifyColor(rgb.Red, rgb.Green, rgb.Blue)
@@ -257,7 +377,22 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 							}
 						}
 
-						// 2.3 Detecção de Tamanho de Fonte ABNT
+						// 2.3 Detecção de Família de Fonte ABNT (Arial ou Times New Roman uniforme)
+						if ts.WeightedFontFamily != nil && ts.WeightedFontFamily.FontFamily != "" {
+							fam := ts.WeightedFontFamily.FontFamily
+							if !strings.EqualFold(fam, opts.ExpectedFontFamily) && strings.TrimSpace(txt) != "" {
+								report.FontFamilyAnomalies = append(report.FontFamilyAnomalies, FontFamilyAnomalyItem{
+									StartIndex:     pEl.StartIndex,
+									EndIndex:       pEl.EndIndex,
+									CurrentFamily:  fam,
+									ExpectedFamily: opts.ExpectedFontFamily,
+									Text:           strings.TrimSpace(txt),
+								})
+								fontFamilyFixRanges = append(fontFamilyFixRanges, RangeItem{Start: pEl.StartIndex, End: pEl.EndIndex})
+							}
+						}
+
+						// 2.4 Detecção de Tamanho de Fonte ABNT
 						if ts.FontSize != nil && strings.TrimSpace(txt) != "" {
 							pt := ts.FontSize.Magnitude
 
@@ -269,7 +404,6 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 								strings.HasPrefix(trimmedP, "Nota:")
 
 							if isCaptionOrSource {
-								// Legenda e Fonte exigem 10 pt
 								if pt < 9.5 || pt > 10.5 {
 									report.FontSizeAnomalies = append(report.FontSizeAnomalies, FontSizeAnomalyItem{
 										StartIndex:   pEl.StartIndex,
@@ -280,8 +414,30 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 										Text:         strings.TrimSpace(txt),
 									})
 								}
-							} else if !isHeading {
-								// Corpo comum (NORMAL_TEXT) exige 12 pt
+							} else if isPreTextualNote(trimmedP) {
+								if pt < 9.5 || pt > 12.5 {
+									report.FontSizeAnomalies = append(report.FontSizeAnomalies, FontSizeAnomalyItem{
+										StartIndex:   pEl.StartIndex,
+										EndIndex:     pEl.EndIndex,
+										CurrentSize:  pt,
+										ExpectedSize: 10.0,
+										ContextType:  "Nota Institucional Pré-Textual (Folha de Rosto)",
+										Text:         strings.TrimSpace(txt),
+									})
+								}
+							} else if isHeading {
+								if pt < 11.5 || pt > 12.5 {
+									report.FontSizeAnomalies = append(report.FontSizeAnomalies, FontSizeAnomalyItem{
+										StartIndex:   pEl.StartIndex,
+										EndIndex:     pEl.EndIndex,
+										CurrentSize:  pt,
+										ExpectedSize: 12.0,
+										ContextType:  "Título de Seção (ABNT NBR 14724/6024)",
+										Text:         strings.TrimSpace(txt),
+									})
+									fontFixRanges = append(fontFixRanges, RangeItem{Start: pEl.StartIndex, End: pEl.EndIndex})
+								}
+							} else {
 								if pt < 11.5 || pt > 12.5 {
 									report.FontSizeAnomalies = append(report.FontSizeAnomalies, FontSizeAnomalyItem{
 										StartIndex:   pEl.StartIndex,
@@ -300,6 +456,248 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			}
 
 			trimmed := strings.TrimSpace(pText)
+
+			// 2.5 Auditoria de Ordem Estrutural (NBR 14724)
+			if opts.CheckStructuralOrder {
+				upperTrim := strings.ToUpper(trimmed)
+
+				// Verifica se é título pré-textual importante
+				isPreTextualTitle := upperTrim == "RESUMO" || upperTrim == "ABSTRACT" ||
+					upperTrim == "SUMÁRIO" || upperTrim == "SUMARIO" ||
+					strings.HasPrefix(upperTrim, "LISTA DE ")
+
+				if isPreTextualTitle {
+					if currentState == stateTextual {
+						report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+							ElementIndex: i,
+							StartIndex:   el.StartIndex,
+							EndIndex:     el.EndIndex,
+							SectionTitle: trimmed,
+							Severity:     "CRÍTICO",
+							RuleViolated: "ABNT NBR 14724: Elemento pré-textual obrigatório localizado dentro da parte textual",
+							Details:      fmt.Sprintf("O título '%s' é pré-textual e deve anteceder o primeiro capítulo numerado (iniciado no elemento %d).", trimmed, firstChapterIndex),
+						})
+					} else if currentState == statePostTextual {
+						report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+							ElementIndex: i,
+							StartIndex:   el.StartIndex,
+							EndIndex:     el.EndIndex,
+							SectionTitle: trimmed,
+							Severity:     "CRÍTICO",
+							RuleViolated: "ABNT NBR 14724: Elemento pré-textual obrigatório localizado na parte pós-textual",
+							Details:      fmt.Sprintf("O título '%s' é pré-textual e não pode estar localizado após a seção de REFERÊNCIAS (elemento %d). Reorganize-o para antes da Introdução.", trimmed, referencesIndex),
+						})
+					}
+				}
+
+				// Verifica início ou progressão de capítulos numerados
+				if rePrimaryHeadingNum.MatchString(trimmed) || (isHeading && reChapterNumber.MatchString(trimmed)) {
+					if currentState == statePostTextual {
+						report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+							ElementIndex: i,
+							StartIndex:   el.StartIndex,
+							EndIndex:     el.EndIndex,
+							SectionTitle: trimmed,
+							Severity:     "CRÍTICO",
+							RuleViolated: "ABNT NBR 14724: Capítulo textual numerado posicionado após REFERÊNCIAS",
+							Details:      fmt.Sprintf("O capítulo '%s' está após a seção de REFERÊNCIAS (elemento %d). Capítulos devem anteceder as referências bibliográficas.", trimmed, referencesIndex),
+						})
+					}
+
+					currentState = stateTextual
+					if firstChapterIndex < 0 {
+						firstChapterIndex = i
+					}
+
+					if m := reChapterNumber.FindStringSubmatch(trimmed); len(m) > 1 {
+						if num, errNum := strconv.Atoi(m[1]); errNum == nil {
+							if num <= highestChapterNum {
+								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+									ElementIndex: i,
+									StartIndex:   el.StartIndex,
+									EndIndex:     el.EndIndex,
+									SectionTitle: trimmed,
+									Severity:     "ALERTA",
+									RuleViolated: "ABNT NBR 6024: Numeração progressiva de capítulos em ordem não crescente ou duplicada",
+									Details:      fmt.Sprintf("Capítulo %d encontrado após capítulo %d.", num, highestChapterNum),
+								})
+							} else {
+								highestChapterNum = num
+							}
+						}
+					}
+				}
+
+				// Verifica seção pós-textual de REFERÊNCIAS
+				if strings.Contains(upperTrim, "REFERÊNCIAS") && (isHeading || strings.HasPrefix(trimmed, "3 ") || strings.HasPrefix(trimmed, "7 ") || trimmed == "REFERÊNCIAS") {
+					currentState = statePostTextual
+					if referencesIndex < 0 {
+						referencesIndex = i
+					}
+				}
+
+				// Alerta sobre ilustrações/figuras dentro de referências
+				isFigureOrTableLabel := strings.HasPrefix(trimmed, "Figura ") || strings.HasPrefix(trimmed, "Tabela ") || strings.HasPrefix(trimmed, "Quadro ")
+				if isFigureOrTableLabel && currentState == statePostTextual {
+					report.MisplacedElements = append(report.MisplacedElements,
+						fmt.Sprintf("Elemento %d [%d-%d]: Legenda de ilustração '%s' posicionada indevidamente dentro da seção de REFERÊNCIAS (NBR 6023).",
+							i, el.StartIndex, el.EndIndex, trimmed))
+				}
+			}
+
+			// 2.6 Auditoria de Vazamentos LaTeX (comandos, matemática, til, tags)
+			if opts.CheckLatexLeaks && trimmed != "" {
+				// Comandos LaTeX
+				if m := reLatexCmdInText.FindString(pText); m != "" {
+					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						LeakType:     "Comando LaTeX residual",
+						Snippet:      m,
+						Suggestion:   "Remover comando ou converter para texto/estilo nativo do Google Docs.",
+					})
+				}
+
+				// Sintaxe Matemática $...$
+				if m := reMathSyntaxInText.FindString(pText); m != "" {
+					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						LeakType:     "Sintaxe Matemática ($...$)",
+						Snippet:      m,
+						Suggestion:   "Substituir delimitação matemática por caracteres Unicode diretos (ex: 2 × 2 em vez de $2 \\times 2$).",
+					})
+				}
+
+				// Til de espaço insecável
+				if strings.Contains(pText, "~") && !strings.Contains(pText, "http") {
+					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						LeakType:     "Espaço Insecável LaTeX (~)",
+						Snippet:      "~",
+						Suggestion:   "Substituir o caractere til (~) por espaço simples.",
+					})
+				}
+
+				// Parênteses quebrados/duplicados
+				if m := reBrokenParenthesis.FindString(pText); m != "" {
+					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						LeakType:     "Parênteses redundantes/desbalanceados",
+						Snippet:      m,
+						Suggestion:   "Ajustar pontuação ou fecho de citações (ex: substituir '))' por ')').",
+					})
+				}
+
+				// Marcadores artificiais soltos
+				if strings.Contains(pText, "[TABELA]") || strings.Contains(pText, "[/TABELA]") || strings.Contains(pText, "[VER IMAGEM") {
+					report.DanglingMarkers = append(report.DanglingMarkers,
+						fmt.Sprintf("Elemento %d [%d-%d]: Marcador artificial -> %q",
+							i, el.StartIndex, el.EndIndex, trimmed))
+				}
+			}
+
+			// 2.7 Auditoria de Espaços Duplos e Espaços Antes de Pontuação
+			if opts.CheckSpacingAndText && trimmed != "" {
+				if matches := reDoubleSpace.FindAllStringIndex(pText, -1); len(matches) > 0 {
+					for _, match := range matches {
+						snippetStart := match[0] - 10
+						if snippetStart < 0 {
+							snippetStart = 0
+						}
+						snippetEnd := match[1] + 10
+						if snippetEnd > len(pText) {
+							snippetEnd = len(pText)
+						}
+						report.DoubleSpacingAnomalies = append(report.DoubleSpacingAnomalies, DoubleSpaceAnomalyItem{
+							StartIndex: el.StartIndex + int64(match[0]),
+							EndIndex:   el.StartIndex + int64(match[1]),
+							IssueType:  "Espaço Duplo / Múltiplo",
+							Snippet:    pText[snippetStart:snippetEnd],
+						})
+					}
+				}
+
+				if matches := reSpaceBeforePunct.FindAllStringSubmatchIndex(pText, -1); len(matches) > 0 {
+					for _, match := range matches {
+						snippetStart := match[0] - 10
+						if snippetStart < 0 {
+							snippetStart = 0
+						}
+						snippetEnd := match[1] + 10
+						if snippetEnd > len(pText) {
+							snippetEnd = len(pText)
+						}
+						report.DoubleSpacingAnomalies = append(report.DoubleSpacingAnomalies, DoubleSpaceAnomalyItem{
+							StartIndex: el.StartIndex + int64(match[0]),
+							EndIndex:   el.StartIndex + int64(match[1]),
+							IssueType:  "Espaço Antes de Pontuação",
+							Snippet:    pText[snippetStart:snippetEnd],
+						})
+					}
+				}
+			}
+
+			// 2.8 Qualidade do Parágrafo e Alíneas ABNT
+			if opts.CheckSpacingAndText && currentState == stateTextual && !isHeading {
+				isCaptionOrSource := strings.HasPrefix(trimmed, "Figura ") ||
+					strings.HasPrefix(trimmed, "Tabela ") ||
+					strings.HasPrefix(trimmed, "Quadro ") ||
+					strings.HasPrefix(trimmed, "Fonte:") ||
+					strings.HasPrefix(trimmed, "Nota:")
+
+				isBullet := p.Bullet != nil || strings.HasPrefix(trimmed, "•") || strings.HasPrefix(trimmed, "- ")
+
+				if isBullet {
+					consecutiveBullets++
+					if consecutiveBullets == 4 {
+						report.BulletListAnomalies = append(report.BulletListAnomalies, BulletListAnomalyItem{
+							StartIndex:       el.StartIndex,
+							EndIndex:         el.EndIndex,
+							ConsecutiveCount: consecutiveBullets,
+							Snippet:          trimmed,
+							Suggestion:       "ABNT NBR 6024/14724: Enumerações sequenciais longas no corpo devem preferencialmente seguir a formatação de alíneas (a, b, c...) com recuo de 1,25 cm, finalizadas com ponto e vírgula (;).",
+						})
+					}
+				} else {
+					consecutiveBullets = 0
+				}
+
+				if !isCaptionOrSource && !isBullet && !isPreTextualNote(trimmed) && trimmed != "" {
+					runeLen := utf8.RuneCountInString(trimmed)
+					if runeLen < 100 && !strings.Contains(trimmed, "[TABELA]") {
+						report.ParagraphQualityAnomalies = append(report.ParagraphQualityAnomalies, ParagraphQualityItem{
+							ElementIndex: i,
+							StartIndex:   el.StartIndex,
+							EndIndex:     el.EndIndex,
+							IssueType:    "Parágrafo Órfão / Frase Curta (< 100 caracteres)",
+							Length:       runeLen,
+							Snippet:      trimmed,
+							Suggestion:   "ABNT NBR 14724: Parágrafos acadêmicos devem conter introdução, desenvolvimento e conclusão da ideia. Evite períodos soltos de uma só linha no corpo do trabalho.",
+						})
+					} else if runeLen > 1500 {
+						snippet := trimmed
+						if len(snippet) > 80 {
+							snippet = snippet[:80] + "..."
+						}
+						report.ParagraphQualityAnomalies = append(report.ParagraphQualityAnomalies, ParagraphQualityItem{
+							ElementIndex: i,
+							StartIndex:   el.StartIndex,
+							EndIndex:     el.EndIndex,
+							IssueType:    "Parágrafo Excessivamente Longo (> 1500 caracteres)",
+							Length:       runeLen,
+							Snippet:      snippet,
+							Suggestion:   "Recomenda-se dividir parágrafos com mais de 1500 caracteres para favorecer a clareza e fluidez da leitura acadêmica.",
+						})
+					}
+				}
+			}
 
 			// Parágrafo vazio ou quebra múltipla
 			if trimmed == "" {
@@ -334,18 +732,11 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 					fmt.Sprintf("Elemento %d [%d-%d]: Quebra manual (\\u000b) -> %q",
 						i, el.StartIndex, el.EndIndex, snippet))
 			}
-
-			// Marcadores artificiais soltos
-			if strings.Contains(pText, "[TABELA]") || strings.Contains(pText, "[/TABELA]") || strings.Contains(pText, "[VER IMAGEM") {
-				report.DanglingMarkers = append(report.DanglingMarkers,
-					fmt.Sprintf("Elemento %d [%d-%d]: Marcador artificial -> %q",
-						i, el.StartIndex, el.EndIndex, trimmed))
-			}
 		}
 	}
 
 	// 3. Execução de Autocorreção (se autoFix == true)
-	if autoFix {
+	if opts.AutoFix {
 		fixedCount := 0
 		var requests []*docs.Request
 
@@ -389,7 +780,41 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			}
 		}
 
-		// 3.3 Normaliza tamanhos de fonte do corpo para 12 pt
+		// 3.3 Substitui espaços duplos e espaços antes de pontuação
+		var textCleanReqs []*docs.Request
+		if len(report.DoubleSpacingAnomalies) > 0 {
+			// Dois passos para colapsar múltiplos espaços
+			textCleanReqs = append(textCleanReqs,
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "  "}, ReplaceText: " "}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "  "}, ReplaceText: " "}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " ,"}, ReplaceText: ","}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " ."}, ReplaceText: "."}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " ;"}, ReplaceText: ";"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " :"}, ReplaceText: ":"}},
+			)
+		}
+
+		// 3.4 Limpa vazamentos de sintaxe simples de LaTeX e marcadores
+		if len(report.LatexSyntaxLeaks) > 0 || len(report.DanglingMarkers) > 0 {
+			textCleanReqs = append(textCleanReqs,
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "$2 \\times 2$"}, ReplaceText: "2 × 2"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\times"}, ReplaceText: "×"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\ge"}, ReplaceText: "≥"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\le"}, ReplaceText: "≤"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "~"}, ReplaceText: " "}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "[TABELA]"}, ReplaceText: ""}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "[/TABELA]"}, ReplaceText: ""}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "[VER IMAGEM"}, ReplaceText: ""}},
+			)
+		}
+
+		if len(textCleanReqs) > 0 {
+			if _, errTxt := docsSvc.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{Requests: textCleanReqs}).Do(); errTxt == nil {
+				fixedCount += len(textCleanReqs)
+			}
+		}
+
+		// 3.5 Normaliza tamanhos de fonte do corpo para 12 pt
 		for _, fr := range fontFixRanges {
 			requests = append(requests, &docs.Request{
 				UpdateTextStyle: &docs.UpdateTextStyleRequest{
@@ -408,8 +833,26 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			})
 		}
 
-		// 3.4 Limpeza de marca-texto se solicitado explicitamente
-		if clearHighlights && len(highlightRanges) > 0 {
+		// 3.6 Normaliza família de fonte para o padrão ABNT (Arial / Times)
+		for _, ffr := range fontFamilyFixRanges {
+			requests = append(requests, &docs.Request{
+				UpdateTextStyle: &docs.UpdateTextStyleRequest{
+					Range: &docs.Range{
+						StartIndex: ffr.Start,
+						EndIndex:   ffr.End,
+					},
+					TextStyle: &docs.TextStyle{
+						WeightedFontFamily: &docs.WeightedFontFamily{
+							FontFamily: opts.ExpectedFontFamily,
+						},
+					},
+					Fields: "weightedFontFamily",
+				},
+			})
+		}
+
+		// 3.7 Limpeza de marca-texto se solicitado explicitamente
+		if opts.ClearHighlights && len(highlightRanges) > 0 {
 			for _, hr := range highlightRanges {
 				requests = append(requests, &docs.Request{
 					UpdateTextStyle: &docs.UpdateTextStyleRequest{
@@ -419,7 +862,6 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 						},
 						TextStyle: &docs.TextStyle{
 							// Para remover marca-texto no Google Docs, não define BackgroundColor
-							// ou define campos vazios
 						},
 						Fields: "backgroundColor",
 					},
@@ -439,7 +881,10 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 	} else {
 		totalAnomalies := len(report.EmptyTables) + len(report.BoldCascades) + len(report.ConsecutiveBlankLines) +
 			len(report.SoftLineBreaks) + len(report.DanglingMarkers) + len(report.ReviewHighlights) +
-			len(report.FontSizeAnomalies) + len(report.TextColorAnomalies)
+			len(report.FontSizeAnomalies) + len(report.FontFamilyAnomalies) + len(report.TextColorAnomalies) +
+			len(report.StructuralOrderViolations) + len(report.MisplacedElements) + len(report.LatexSyntaxLeaks) +
+			len(report.DoubleSpacingAnomalies) + len(report.ParagraphQualityAnomalies) + len(report.BulletListAnomalies)
+
 		report.Message = fmt.Sprintf("Auditoria concluída. %d anomalias/destaques identificados no documento (autoFix=false).", totalAnomalies)
 	}
 
