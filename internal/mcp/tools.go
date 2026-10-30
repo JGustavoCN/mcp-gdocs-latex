@@ -32,7 +32,7 @@ func RegisterTools(s *server.MCPServer) {
 	registerSyncPDFToDrive(s)
 	registerUpdateLocalLatex(s)
 
-	// Novas ferramentas ABNT / Tabelas / Imagens / Hash
+	// Novas ferramentas ABNT / Tabelas / Imagens / Hash / Linter
 	registerApplyAbntPageMargins(s)
 	registerReplaceBlockAbnt(s)
 	registerFormatDocumentAbnt(s)
@@ -40,6 +40,11 @@ func RegisterTools(s *server.MCPServer) {
 	registerInsertMermaidDiagram(s)
 	registerCheckPdfSync(s)
 	registerLintDocumentAbnt(s)
+
+	// Sincronização Bidirecional LaTeX <-> GDocs e Auditoria de Estrutura do TCC
+	registerGetTCCLatexStructure(s)
+	registerConvertTextToLatex(s)
+	registerUpdateLatexSection(s)
 }
 
 // ─── Tool X: get_doc_skeleton ───────────────────────────────────────────────
@@ -699,7 +704,7 @@ func handleReplaceBlockAbnt(ctx context.Context, request mcplib.CallToolRequest)
 func registerFormatDocumentAbnt(s *server.MCPServer) {
 	tool := mcplib.NewTool("format_document_abnt",
 		mcplib.WithDescription(
-			"Formata parágrafos do documento no padrão ABNT NBR 14724 (alinhamento justificado, espaçamento 1.5, recuo de 1ª linha de 1.25cm). Aceita opcionalmente start_index e end_index para formatação parcial."),
+			"Ferramenta unificada de formatação ABNT NBR 14724: configura margens de página A4 (Superior 3cm, Esquerda 3cm, Inferior 2cm, Direita 2cm) E formata parágrafos de forma inteligente e seletiva: corpo de texto com recuo de 1,25cm (35,433 pt), entrelinhas 1.5, justificado e fonte 12pt; preserva títulos alinhados à esquerda sem recuo com keepWithNext; preserva legendas e fontes com espaço simples (100%) e fonte 10pt; preserva tabelas nativas intactas sem aplicar recuos nas células."),
 		mcplib.WithString("document_url_or_id",
 			mcplib.Required(),
 			mcplib.Description("URL completa do Google Docs ou apenas o ID do documento"),
@@ -937,13 +942,23 @@ func handleCheckPdfSync(ctx context.Context, request mcplib.CallToolRequest) (*m
 func registerLintDocumentAbnt(s *server.MCPServer) {
 	tool := mcplib.NewTool("lint_document_abnt",
 		mcplib.WithDescription(
-			"Diagnostica e higieniza anomalias no Google Docs segundo as normas ABNT e boas práticas editoriais: detecta tabelas vazias ou com células faltantes, cascatas de negrito (>150 caracteres contínuos no corpo do texto), quebras manuais de linha (\\u000b), quebras múltiplas consecutivas e marcadores soltos. O parâmetro 'auto_fix' (default: false) permite expurgar automaticamente tabelas vazias e normalizar quebras."),
+			"Audita o Google Docs com checklist completo de conformidade ABNT, qualidade editorial e revisões: "+
+				"1) Trechos com marca-texto/grifo colorido deixados pelo orientador/revisores (classificados por cor semântica e cruzados com comentários ativos); "+
+				"2) Anomalias de tamanho de fonte segundo a ABNT (corpo: 12pt; legendas e fontes: 10pt) exibindo o texto exato; "+
+				"3) Cores de texto anômalas (fora do preto padrão); "+
+				"4) Cascatas de negrito (>120 caracteres contínuos no corpo); "+
+				"5) Tabelas vazias ou com células faltantes; "+
+				"6) Quebras manuais (\u000b) e linhas em branco consecutivas; "+
+				"7) Marcadores soltos. Com 'auto_fix: true', expurga tabelas vazias, normaliza quebras e ajusta fontes do corpo para 12pt. O parâmetro 'clear_highlights: true' limpa os marca-textos revisados."),
 		mcplib.WithString("document_url_or_id",
 			mcplib.Required(),
 			mcplib.Description("URL completa do Google Docs ou apenas o ID do documento"),
 		),
 		mcplib.WithBoolean("auto_fix",
-			mcplib.Description("Se true, executa automaticamente a exclusão de tabelas vazias e a normalização de quebras de linha manuais (default: false)"),
+			mcplib.Description("Se true, executa automaticamente a exclusão de tabelas vazias, normalização de quebras de linha manuais e ajuste de fontes do corpo (default: false)"),
+		),
+		mcplib.WithBoolean("clear_highlights",
+			mcplib.Description("Se true (junto com auto_fix), remove a cor de fundo (marca-texto) dos trechos grifados de revisão (default: false)"),
 		),
 	)
 	s.AddTool(tool, handleLintDocumentAbnt)
@@ -957,15 +972,16 @@ func handleLintDocumentAbnt(ctx context.Context, request mcplib.CallToolRequest)
 	}
 
 	autoFix := request.GetBool("auto_fix", false)
+	clearHighlights := request.GetBool("clear_highlights", false)
 
 	docID, err := gdocs.ExtractAndValidateDocID(ctx, input)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
 	}
 
-	log.Printf("[INFO] lint_document_abnt → doc: %s | autoFix: %v", docID, autoFix)
+	log.Printf("[INFO] lint_document_abnt → doc: %s | autoFix: %v | clearHighlights: %v", docID, autoFix, clearHighlights)
 
-	report, err := gdocs.LintDocumentABNT(ctx, docID, autoFix)
+	report, err := gdocs.LintDocumentABNT(ctx, docID, autoFix, clearHighlights)
 	if err != nil {
 		log.Printf("[ERRO] lint_document_abnt: %v", err)
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
@@ -973,5 +989,109 @@ func handleLintDocumentAbnt(ctx context.Context, request mcplib.CallToolRequest)
 
 	resJSON, _ := json.MarshalIndent(report, "", "  ")
 	return mcplib.NewToolResultText(string(resJSON)), nil
+}
+
+// ─── Tool 19: get_tcc_latex_structure ──────────────────────────────────────
+
+func registerGetTCCLatexStructure(s *server.MCPServer) {
+	tool := mcplib.NewTool("get_tcc_latex_structure",
+		mcplib.WithDescription(
+			"Analisa todos os arquivos .tex do TCC local (capítulos, seções, tabelas, figuras e labels) e retorna o sumário estrutural completo com localização exata por arquivo e número de linha. Essencial para orientar a sincronização bidirecional entre Google Docs e LaTeX."),
+		mcplib.WithString("tcc_dir",
+			mcplib.Description("Diretório raiz do TCC (opcional, padrão: 'resources/tcc')"),
+		),
+	)
+	s.AddTool(tool, handleGetTCCLatexStructure)
+	log.Println("[INFO] Ferramenta registrada: get_tcc_latex_structure")
+}
+
+func handleGetTCCLatexStructure(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	tccDir := request.GetString("tcc_dir", "resources/tcc")
+
+	log.Printf("[INFO] get_tcc_latex_structure → dir: %s", tccDir)
+
+	elements, err := latex.ScanTCCStructure(tccDir)
+	if err != nil {
+		log.Printf("[ERRO] get_tcc_latex_structure: %v", err)
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	}
+
+	resJSON, _ := json.MarshalIndent(elements, "", "  ")
+	return mcplib.NewToolResultText(string(resJSON)), nil
+}
+
+// ─── Tool 20: convert_text_to_latex ────────────────────────────────────────
+
+func registerConvertTextToLatex(s *server.MCPServer) {
+	tool := mcplib.NewTool("convert_text_to_latex",
+		mcplib.WithDescription(
+			"Converte texto formatado vindo do Google Docs ou Markdown para sintaxe LaTeX compatível com as normas ABNT: converte aspas para tipografia TeX (``...''), estilos de negrito/itálico para \\textbf{}/\\textit{}, referências [@chave] para \\cite{chave} e escapa com segurança caracteres reservados (%, &, _, #, $)."),
+		mcplib.WithString("text",
+			mcplib.Required(),
+			mcplib.Description("Texto a ser convertido para sintaxe LaTeX"),
+		),
+	)
+	s.AddTool(tool, handleConvertTextToLatex)
+	log.Println("[INFO] Ferramenta registrada: convert_text_to_latex")
+}
+
+func handleConvertTextToLatex(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	text, err := request.RequireString("text")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'text' é obrigatório."), nil
+	}
+
+	converted := latex.ConvertGDocsTextToLatex(text)
+	return mcplib.NewToolResultText(converted), nil
+}
+
+// ─── Tool 21: update_latex_section ─────────────────────────────────────────
+
+func registerUpdateLatexSection(s *server.MCPServer) {
+	tool := mcplib.NewTool("update_latex_section",
+		mcplib.WithDescription(
+			"Sincronização reversa segura (Google Docs -> LaTeX): atualiza o corpo de uma seção ou subseção específica dentro de um arquivo .tex local a partir do texto revisado, preservando comandos de cabeçalho (\\section, \\label), aplicando regras tipográficas do TeX e gerando backup automático .bak antes da escrita."),
+		mcplib.WithString("file_path",
+			mcplib.Required(),
+			mcplib.Description("Caminho do arquivo .tex local a ser atualizado (ex: 'resources/tcc/capitulos/01-introducao.tex')"),
+		),
+		mcplib.WithString("target_section",
+			mcplib.Required(),
+			mcplib.Description("Título da seção/subseção ou seu label (ex: 'Contextualização' ou 'sec:contextualizacao')"),
+		),
+		mcplib.WithString("new_text",
+			mcplib.Required(),
+			mcplib.Description("Novo texto revisado no Google Docs para preencher a seção no LaTeX"),
+		),
+	)
+	s.AddTool(tool, handleUpdateLatexSection)
+	log.Println("[INFO] Ferramenta registrada: update_latex_section")
+}
+
+func handleUpdateLatexSection(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	filePath, err := request.RequireString("file_path")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'file_path' é obrigatório."), nil
+	}
+
+	targetSection, err := request.RequireString("target_section")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'target_section' é obrigatório."), nil
+	}
+
+	newText, err := request.RequireString("new_text")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'new_text' é obrigatório."), nil
+	}
+
+	log.Printf("[INFO] update_latex_section → file: %s | section: %s", filePath, targetSection)
+
+	msg, err := latex.UpdateLatexSectionInFile(filePath, targetSection, newText)
+	if err != nil {
+		log.Printf("[ERRO] update_latex_section: %v", err)
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	}
+
+	return mcplib.NewToolResultText(msg), nil
 }
 

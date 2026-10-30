@@ -209,7 +209,7 @@ Híbrido (RAG + MCP) & Presente (Regulamentos) & Presente (SUAP) \\
 	fmt.Println("\n--------------------------------------------------------------------")
 	fmt.Println("📌 ETAPA 8: Diagnóstico e Higienização Estrutural (LintDocumentABNT)")
 	fmt.Println("--------------------------------------------------------------------")
-	lintReport, err := gdocs.LintDocumentABNT(ctx, testDocID, true)
+	lintReport, err := gdocs.LintDocumentABNT(ctx, testDocID, true, false)
 	if err != nil {
 		fmt.Printf("❌ Erro no linter: %v\n", err)
 	} else {

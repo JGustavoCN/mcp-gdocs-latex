@@ -159,8 +159,9 @@ func BuildABNTReplaceSequence(startIndex, endIndex, bodyEndIndex int64, newText 
 					Magnitude: 0,
 					Unit:      "PT",
 				},
+				AvoidWidowAndOrphan: true,
 			},
-			Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow",
+			Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
 		},
 	})
 

@@ -130,8 +130,9 @@ func insertInlineImageDirect(ctx context.Context, documentID string, targetIndex
 				ParagraphStyle: &docs.ParagraphStyle{
 					Alignment:      "CENTER",
 					NamedStyleType: "NORMAL_TEXT",
+					KeepWithNext:   true,
 				},
-				Fields: "alignment,namedStyleType",
+				Fields: "alignment,namedStyleType,keepWithNext",
 			},
 		})
 		currentOffset += capLen
@@ -177,8 +178,9 @@ func insertInlineImageDirect(ctx context.Context, documentID string, targetIndex
 				ParagraphStyle: &docs.ParagraphStyle{
 					Alignment:      "CENTER",
 					NamedStyleType: "NORMAL_TEXT",
+					KeepWithNext:   true,
 				},
-				Fields: "alignment,namedStyleType",
+				Fields: "alignment,namedStyleType,keepWithNext",
 			},
 		})
 	}

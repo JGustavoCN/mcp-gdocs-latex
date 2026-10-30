@@ -3,6 +3,7 @@ package gdocs
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"google.golang.org/api/docs/v1"
 )
@@ -81,7 +82,9 @@ func ApplyABNTPageMargins(ctx context.Context, documentID string) (string, error
 	return "SUCESSO: Margens e tamanho de página A4 ABNT (Superior 3cm, Esquerda 3cm, Inferior 2cm, Direita 2cm) aplicadas com sucesso.", nil
 }
 
-// FormatDocumentABNT formata parágrafos do documento segundo as normas ABNT (NBR 14724)
+// FormatDocumentABNT formata parágrafos e página segundo as normas ABNT (NBR 14724)
+// de forma inteligente e unificada: preserva títulos, legendas, fontes e tabelas nativas,
+// e aplica margens oficiais A4 (3/3/2/2 cm) se applyMargins == true.
 func FormatDocumentABNT(ctx context.Context, documentID string, startIndex, endIndex int64, applyMargins bool) (string, error) {
 	svc, err := GetDocsService(ctx)
 	if err != nil {
@@ -112,45 +115,160 @@ func FormatDocumentABNT(ctx context.Context, documentID string, startIndex, endI
 		return "", fmt.Errorf("intervalo de formatação inválido: [%d - %d]", start, end)
 	}
 
-	targetRange := &docs.Range{
-		StartIndex: start,
-		EndIndex:   end,
-	}
-
 	var requests []*docs.Request
 
-	// 1. Aplica margens se solicitado
+	// 1. Configuração unificada de página: Margens ABNT 3/3/2/2 cm e Folha A4
 	if applyMargins {
 		requests = append(requests, BuildABNTDocumentMarginsRequest())
 	}
 
-	// 2. Aplica estilo de parágrafo ABNT no range
-	requests = append(requests, &docs.Request{
-		UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
-			Range: targetRange,
-			ParagraphStyle: &docs.ParagraphStyle{
-				Alignment:   "JUSTIFIED",
-				LineSpacing: ABNTLineSpacing,
-				IndentFirstLine: &docs.Dimension{
-					Magnitude: ABNTIndentFirstLinePt,
-					Unit:      "PT",
-				},
-				IndentStart: &docs.Dimension{
-					Magnitude: 0,
-					Unit:      "PT",
-				},
-				SpaceAbove: &docs.Dimension{
-					Magnitude: 0,
-					Unit:      "PT",
-				},
-				SpaceBelow: &docs.Dimension{
-					Magnitude: 0,
-					Unit:      "PT",
-				},
-			},
-			Fields: "alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow",
-		},
-	})
+	formattedParas := 0
+	preservedHeadings := 0
+	preservedCaptions := 0
+
+	// 2. Iteração estrutural elemento por elemento (Preservação de títulos, legendas e tabelas)
+	for _, el := range doc.Body.Content {
+		// Elemento fora do range solicitado
+		if el.EndIndex <= start || el.StartIndex >= end {
+			continue
+		}
+
+		// Se for tabela nativa: PRESERVA INTACTA (não aplica recuo de parágrafo nas células)
+		if el.Table != nil {
+			continue
+		}
+
+		if el.Paragraph != nil {
+			p := el.Paragraph
+			styleName := ""
+			if p.ParagraphStyle != nil {
+				styleName = p.ParagraphStyle.NamedStyleType
+			}
+
+			// Coleta texto do parágrafo
+			pText := ""
+			for _, pEl := range p.Elements {
+				if pEl.TextRun != nil {
+					pText += pEl.TextRun.Content
+				}
+			}
+			trimmed := strings.TrimSpace(pText)
+			if trimmed == "" {
+				continue
+			}
+
+			// Delimita o range seguro deste parágrafo
+			pStart := el.StartIndex
+			pEnd := el.EndIndex
+			if pStart < start {
+				pStart = start
+			}
+			if pEnd > end {
+				pEnd = end
+			}
+			if pStart >= pEnd {
+				continue
+			}
+
+			pRange := &docs.Range{
+				StartIndex: pStart,
+				EndIndex:   pEnd,
+			}
+
+			isHeading := strings.HasPrefix(styleName, "HEADING_") || styleName == "TITLE"
+			isCaption := strings.HasPrefix(trimmed, "Figura ") ||
+				strings.HasPrefix(trimmed, "Tabela ") ||
+				strings.HasPrefix(trimmed, "Quadro ") ||
+				strings.HasPrefix(trimmed, "Gráfico ")
+			isSource := strings.HasPrefix(trimmed, "Fonte:") || strings.HasPrefix(trimmed, "Nota:")
+
+			if isHeading {
+				// TÍTULOS ABNT: Alinhamento à esquerda (START), sem recuo de 1ª linha, entrelinhas 1.5, keepWithNext
+				preservedHeadings++
+				requests = append(requests, &docs.Request{
+					UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+						Range: pRange,
+						ParagraphStyle: &docs.ParagraphStyle{
+							Alignment:           "START",
+							LineSpacing:         150,
+							IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
+							IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
+							SpaceAbove:          &docs.Dimension{Magnitude: 12, Unit: "PT"},
+							SpaceBelow:          &docs.Dimension{Magnitude: 6, Unit: "PT"},
+							KeepWithNext:        true,
+							AvoidWidowAndOrphan: true,
+						},
+						Fields: "alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,keepWithNext,avoidWidowAndOrphan",
+					},
+				})
+			} else if isCaption || isSource {
+				// LEGENDAS E FONTES ABNT: Centralizadas ou à esquerda, sem recuo de 1ª linha, entrelinhas simples, fonte 10pt
+				preservedCaptions++
+				keepWithNext := isCaption // Legenda sempre acompanha a figura/tabela abaixo
+
+				requests = append(requests, &docs.Request{
+					UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+						Range: pRange,
+						ParagraphStyle: &docs.ParagraphStyle{
+							Alignment:           "CENTER",
+							LineSpacing:         100, // Espaço simples
+							IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
+							IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
+							SpaceAbove:          &docs.Dimension{Magnitude: 4, Unit: "PT"},
+							SpaceBelow:          &docs.Dimension{Magnitude: 4, Unit: "PT"},
+							KeepWithNext:        keepWithNext,
+							AvoidWidowAndOrphan: true,
+						},
+						Fields: "alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,keepWithNext,avoidWidowAndOrphan",
+					},
+				})
+
+				// Aplica fonte 10pt na legenda/fonte
+				requests = append(requests, &docs.Request{
+					UpdateTextStyle: &docs.UpdateTextStyleRequest{
+						Range: pRange,
+						TextStyle: &docs.TextStyle{
+							FontSize: &docs.Dimension{Magnitude: 10.0, Unit: "PT"},
+						},
+						Fields: "fontSize",
+					},
+				})
+			} else {
+				// CORPO DO TEXTO (ABNT): Justificado, entrelinhas 1.5, recuo de 1ª linha de 1.25 cm (35.433 pt), fonte 12pt
+				formattedParas++
+				requests = append(requests, &docs.Request{
+					UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+						Range: pRange,
+						ParagraphStyle: &docs.ParagraphStyle{
+							Alignment:           "JUSTIFIED",
+							LineSpacing:         ABNTLineSpacing,
+							IndentFirstLine:     &docs.Dimension{Magnitude: ABNTIndentFirstLinePt, Unit: "PT"},
+							IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
+							SpaceAbove:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
+							SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
+							AvoidWidowAndOrphan: true,
+						},
+						Fields: "alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
+					},
+				})
+
+				// Garante fonte 12pt no corpo comum
+				requests = append(requests, &docs.Request{
+					UpdateTextStyle: &docs.UpdateTextStyleRequest{
+						Range: pRange,
+						TextStyle: &docs.TextStyle{
+							FontSize: &docs.Dimension{Magnitude: 12.0, Unit: "PT"},
+						},
+						Fields: "fontSize",
+					},
+				})
+			}
+		}
+	}
+
+	if len(requests) == 0 {
+		return "Nenhum elemento encontrado para formatação no intervalo.", nil
+	}
 
 	updateReq := &docs.BatchUpdateDocumentRequest{Requests: requests}
 	_, err = svc.Documents.BatchUpdate(documentID, updateReq).Do()
@@ -158,5 +276,10 @@ func FormatDocumentABNT(ctx context.Context, documentID string, startIndex, endI
 		return "", fmt.Errorf("erro ao formatar documento para ABNT: %w", err)
 	}
 
-	return fmt.Sprintf("SUCESSO: Documento formatado em conformidade ABNT no intervalo [%d - %d].", start, end), nil
+	return fmt.Sprintf("SUCESSO: Documento formatado em conformidade ABNT no intervalo [%d - %d].\n"+
+		"- Parágrafos de corpo formatados (1.25cm / 1.5 / Justificado / 12pt): %d\n"+
+		"- Títulos preservados com alinhamento e keepWithNext: %d\n"+
+		"- Legendas/Fontes preservadas com 10pt e espaço simples: %d\n"+
+		"- Margens ABNT A4 aplicadas: %v",
+		start, end, formattedParas, preservedHeadings, preservedCaptions, applyMargins), nil
 }
