@@ -3,6 +3,8 @@ package gdocs
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -192,7 +194,7 @@ func DiffDocStructure(ctx context.Context, documentID string, referenceTCCDir st
 // NormalizeDocStructure executa a padronização IN-PLACE sem apagar texto ou comentários,
 // delegando diretamente para o motor unificado FormatDocumentABNTExtended para garantir tipografia e hierarquia NBR 6024 rigorosas.
 func NormalizeDocStructure(ctx context.Context, documentID string, addPageBreaks bool, cleanLatexCommands bool, applyABNT bool) (*NormalizeResult, error) {
-	msg, err := FormatDocumentABNTExtended(ctx, documentID, -1, -1, applyABNT, cleanLatexCommands, ABNTDefaultFontFamily, true, true)
+	msg, err := FormatDocumentABNTExtended(ctx, documentID, -1, -1, applyABNT, cleanLatexCommands, ABNTDefaultFontFamily, true, true, false)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao executar normalização e formatação ABNT: %w", err)
 	}
@@ -272,81 +274,68 @@ func SyncSectionToDoc(ctx context.Context, documentID, targetSectionTitle, secti
 	return fmt.Sprintf("SUCESSO: Seção '%s' anexada ao documento no índice %d.", targetSectionTitle, targetIndex), nil
 }
 
-// ResetDocToTemplate executa o reset sob demanda estrita a partir do template limpo do IFS
-func ResetDocToTemplate(ctx context.Context, documentID, templateDir string) (string, error) {
-	if templateDir == "" {
-		templateDir = filepath.Join("resources", "template")
-	}
-
+// ResetDocToTemplate executa a inicialização ou reset do documento com o Template Oficial ABNT/IFS,
+// incluindo a Capa canônica com a logo oficial do IFS (3.2cm), Folha de Rosto e capítulos canônicos.
+// Se documentID for vazio ou "new", cria um novo Google Doc no Drive do usuário (ou orienta o compartilhamento se cota da Service Account for 0).
+func ResetDocToTemplate(ctx context.Context, documentID, templateDir string, metadataPath string, customLogoPath ...string) (string, error) {
 	docsSvc, err := GetDocsService(ctx)
 	if err != nil {
 		return "", fmt.Errorf("erro ao obter docs service: %w", err)
 	}
 
-	doc, err := docsSvc.Documents.Get(documentID).Do()
-	if err != nil {
-		return "", fmt.Errorf("erro ao obter documento: %w", err)
+	metaFile := metadataPath
+	if metaFile == "" {
+		metaFile = filepath.Join("resources", "tcc", "metadados.tex")
+	}
+	meta, errMeta := latex.ParseTCCMetadata(metaFile)
+	if errMeta != nil {
+		log.Printf("[WARN] Falha ao ler metadados.tex (%v), utilizando configurações padrão", errMeta)
 	}
 
-	bodyEnd := int64(1)
-	if len(doc.Body.Content) > 0 {
-		bodyEnd = doc.Body.Content[len(doc.Body.Content)-1].EndIndex
-	}
-
-	// 1. Limpeza explícita do corpo sob solicitação formal
-	if bodyEnd > 2 {
-		delReq := &docs.BatchUpdateDocumentRequest{
-			Requests: []*docs.Request{
-				{
-					DeleteContentRange: &docs.DeleteContentRangeRequest{
-						Range: &docs.Range{
-							StartIndex: 1,
-							EndIndex:   bodyEnd - 1,
-						},
-					},
-				},
-			},
+	isNew := documentID == "" || strings.ToLower(strings.TrimSpace(documentID)) == "new"
+	if isNew {
+		docTitle := "TCC - " + meta.Titulo
+		if len(docTitle) > 100 {
+			docTitle = docTitle[:100]
 		}
-		if _, errDel := docsSvc.Documents.BatchUpdate(documentID, delReq).Do(); errDel != nil {
-			return "", fmt.Errorf("erro ao limpar documento para reset: %w", errDel)
+		newDoc, errCreate := docsSvc.Documents.Create(&docs.Document{Title: docTitle}).Do()
+		if errCreate != nil {
+			return "", fmt.Errorf("não foi possível criar um documento vazio autonomamente via Service Account (%v).\n"+
+				"Solução: Crie um documento no seu Google Docs e compartilhe-o com o e-mail da sua Service Account como Editor, fornecendo o ID ou URL para inicialização do template", errCreate)
+		}
+		documentID = newDoc.DocumentId
+		log.Printf("[INFO] Novo documento Google Docs criado com sucesso: ID %s", documentID)
+	}
+
+	logoPath := ""
+	if len(customLogoPath) > 0 && customLogoPath[0] != "" {
+		logoPath = customLogoPath[0]
+	} else if templateDir != "" {
+		possibleLogo := filepath.Join(templateDir, "logo_ifs.png")
+		if _, errStat := os.Stat(possibleLogo); errStat == nil {
+			logoPath = possibleLogo
+		}
+	}
+	if logoPath == "" {
+		if _, errAssets := os.Stat(filepath.Join("assets", "logo_ifs.png")); errAssets == nil {
+			logoPath = filepath.Join("assets", "logo_ifs.png")
+		} else if _, errRoot := os.Stat("logo_ifs.png"); errRoot == nil {
+			logoPath = "logo_ifs.png"
+		} else {
+			logoPath = filepath.Join("resources", "tcc", "logo_ifs.png")
 		}
 	}
 
-	// 2. Inserção do Esqueleto Canônico do Template
-	var sb strings.Builder
-	sb.WriteString("INSTITUTO FEDERAL DE EDUCAÇÃO, CIÊNCIA E TECNOLOGIA DE SERGIPE\n")
-	sb.WriteString("CAMPUS LAGARTO\n")
-	sb.WriteString("BACHARELADO EM SISTEMAS DE INFORMAÇÃO\n\n\n")
-	sb.WriteString("NOME DO AUTOR\n\n\n")
-	sb.WriteString("TÍTULO DO TRABALHO DE CONCLUSÃO DE CURSO: SUBTÍTULO\n\n\n")
-	sb.WriteString("Trabalho de Conclusão de Curso apresentado ao curso de Bacharelado em Sistemas de Informação do Instituto Federal de Educação, Ciência e Tecnologia de Sergipe, Campus Lagarto, como requisito parcial para obtenção do grau de Bacharel em Sistemas de Informação.\n\n")
-	sb.WriteString("Orientador: Prof. Dr. Nome do Orientador\n\n")
-	sb.WriteString("Lagarto/SE\n2026\n\n")
-	sb.WriteString("1 INTRODUÇÃO\n\nEscreva aqui a introdução do trabalho.\n\n")
-	sb.WriteString("2 REFERENCIAL TEÓRICO\n\nEscreva aqui o referencial teórico.\n\n")
-	sb.WriteString("3 METODOLOGIA\n\nEscreva aqui a metodologia científica adotada.\n\n")
-	sb.WriteString("4 RESULTADOS E DISCUSSÃO\n\nEscreva aqui os resultados alcançados.\n\n")
-	sb.WriteString("5 CONCLUSÃO\n\nEscreva aqui as considerações finais.\n\n")
-	sb.WriteString("REFERÊNCIAS\n\nInsira aqui as referências no padrão ABNT NBR 6023.\n")
-
-	templateText := sb.String()
-	insReq := &docs.BatchUpdateDocumentRequest{
-		Requests: []*docs.Request{
-			{
-				InsertText: &docs.InsertTextRequest{
-					Location: &docs.Location{Index: 1},
-					Text:     templateText,
-				},
-			},
-		},
-	}
-	if _, errIns := docsSvc.Documents.BatchUpdate(documentID, insReq).Do(); errIns != nil {
-		return "", fmt.Errorf("erro ao inserir template básico: %w", errIns)
+	errGen := GenerateABNTIFSCoverAndTitlePage(ctx, documentID, meta, logoPath, false)
+	if errGen != nil {
+		return "", fmt.Errorf("erro ao gerar template oficial ABNT/IFS: %w", errGen)
 	}
 
-	// 3. Aplicação imediata de formatação ABNT
-	FormatDocumentABNT(ctx, documentID, -1, -1, true)
+	action := "resetado e inicializado"
+	if isNew {
+		action = "criado do zero"
+	}
 
-	return "SUCESSO: Documento resetado e inicializado com o Template Limpo ABNT/IFS com sucesso.", nil
+	return fmt.Sprintf("SUCESSO: Documento %s com o Template Oficial ABNT/IFS (com Logo do IFS 3.2cm centralizada, Capa, Folha de Rosto e Capítulos NBR 14724/6024).\nID: %s\nURL: https://docs.google.com/document/d/%s/edit", action, documentID, documentID), nil
 }
 

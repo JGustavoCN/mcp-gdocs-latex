@@ -40,6 +40,11 @@ func TestCleanLatexInlineText(t *testing.T) {
 			input:    `Verifique o código em \path{internal/gdocs} e o termo \textit{framework}.`,
 			expected: `Verifique o código em internal/gdocs e o termo framework.`,
 		},
+		{
+			name:     "Remoção de texttt, allowbreak e fechamento misto (caso real informado pelo usuário)",
+			input:    `\texttt{mcp-\allowbreak use) na versão 2.5.2. Esse framework) gerencia os pacotes oficiais do ecossistema npm (\texttt{@modelcontextprotocol/\allowbreak core), \texttt{server), \texttt{client)`,
+			expected: `mcp-use na versão 2.5.2. Esse framework) gerencia os pacotes oficiais do ecossistema npm (@modelcontextprotocol/core, server, client`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -82,6 +87,17 @@ func TestLinterRegexRules(t *testing.T) {
 	m := reChapterNumber.FindStringSubmatch(chapTitle)
 	if len(m) < 2 || m[1] != "2" {
 		t.Errorf("reChapterNumber deveria extrair o número 2 de %q", chapTitle)
+	}
+
+	// 6. Detecção de texttt e allowbreak (caso real)
+	snippetUser := `\texttt{mcp-\allowbreak use) na versão 2.5.2.`
+	if !reLatexCmdInText.MatchString(snippetUser) {
+		t.Errorf("reLatexCmdInText deveria detectar \\texttt em %q", snippetUser)
+	}
+
+	allowbreakSnippet := `O comando \allowbreak não deve vazar no corpo.`
+	if !reLatexCmdInText.MatchString(allowbreakSnippet) {
+		t.Errorf("reLatexCmdInText deveria detectar \\allowbreak em %q", allowbreakSnippet)
 	}
 }
 

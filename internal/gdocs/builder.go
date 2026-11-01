@@ -13,7 +13,7 @@ const (
 	ABNTFontSizeHeadingPt      = 12.0    // Títulos de seções na ABNT são sempre 12 pt!
 	ABNTIndentFirstLinePt      = 35.433  // 1.25 cm (recuo padrão de parágrafos de corpo)
 	ABNTIndentLongQuotePt      = 113.386 // 4.00 cm (recuo para citações diretas longas)
-	ABNTIndentPreTextualNotePt = 212.598 // 7.50 cm (recuo para nota institucional na folha de rosto)
+	ABNTIndentPreTextualNotePt = 226.772 // 8.00 cm (recuo para nota institucional na folha de rosto, metade da página A4)
 	ABNTLineSpacing            = 150     // 1.5 entrelinhas (150%)
 	ABNTLineSpacingSingle      = 100     // 1.0 entrelinhas simples (100%)
 	ABNTMarginTopPt            = 85.039  // 3.00 cm

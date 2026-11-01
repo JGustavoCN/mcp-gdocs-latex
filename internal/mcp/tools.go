@@ -48,7 +48,7 @@ func RegisterTools(s *server.MCPServer) {
 
 	// Gestão Não-Destrutiva, Normalização Estrutural e Sincronização Flexível
 	// (diff_doc_structure foi unificada dentro de get_doc_skeleton para visão 360° em ferramenta única)
-	registerNormalizeDocStructure(s)
+	// (normalize_doc_structure foi unificada e absorvida definitivamente por format_document_abnt)
 	registerSyncSectionToDoc(s)
 	registerResetDocToTemplate(s)
 }
@@ -750,8 +750,14 @@ func registerFormatDocumentAbnt(s *server.MCPServer) {
 		mcplib.WithBoolean("heal_broken_lines",
 			mcplib.Description("Se true, desfragmenta quebras de linha duras de 80 colunas (hard wraps de cópia do LaTeX) unindo linhas órfãs em parágrafos contínuos elegantes (padrão: true)"),
 		),
+		mcplib.WithBoolean("ensure_cover",
+			mcplib.Description("Se true, assegura que a Capa oficial com logo do IFS (3.2cm) e Folha de Rosto estejam presentes, injetando-as se ausentes sem apagar o texto existente (padrão: false)"),
+		),
 		mcplib.WithString("font_family",
 			mcplib.Description("Família tipográfica ABNT (opcional, padrão: 'Arial'; permitido: 'Times New Roman')"),
+		),
+		mcplib.WithString("logo_path",
+			mcplib.Description("Caminho do arquivo local ou URL pública HTTP/HTTPS da logo institucional (opcional, padrão: 'assets/logo_ifs.png' ou 'logo_ifs.png')"),
 		),
 	)
 	s.AddTool(tool, handleFormatDocumentAbnt)
@@ -770,17 +776,19 @@ func handleFormatDocumentAbnt(ctx context.Context, request mcplib.CallToolReques
 	cleanLatex := request.GetBool("clean_latex_commands", true)
 	collapseBlankLines := request.GetBool("collapse_blank_lines", true)
 	healBrokenLines := request.GetBool("heal_broken_lines", true)
+	ensureCover := request.GetBool("ensure_cover", false)
 	fontFamily := request.GetString("font_family", gdocs.ABNTDefaultFontFamily)
+	logoPath := request.GetString("logo_path", "")
 
 	docID, err := gdocs.ExtractAndValidateDocID(ctx, input)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
 	}
 
-	log.Printf("[INFO] format_document_abnt → doc: %s | [%d-%d] | margins: %v | cleanLatex: %v | blanks: %v | heal: %v | font: %s",
-		docID, startIdx, endIdx, applyMargins, cleanLatex, collapseBlankLines, healBrokenLines, fontFamily)
+	log.Printf("[INFO] format_document_abnt → doc: %s | [%d-%d] | margins: %v | cleanLatex: %v | blanks: %v | heal: %v | cover: %v | font: %s | logo: %s",
+		docID, startIdx, endIdx, applyMargins, cleanLatex, collapseBlankLines, healBrokenLines, ensureCover, fontFamily, logoPath)
 
-	result, err := gdocs.FormatDocumentABNTExtended(ctx, docID, startIdx, endIdx, applyMargins, cleanLatex, fontFamily, collapseBlankLines, healBrokenLines)
+	result, err := gdocs.FormatDocumentABNTExtended(ctx, docID, startIdx, endIdx, applyMargins, cleanLatex, fontFamily, collapseBlankLines, healBrokenLines, ensureCover, logoPath)
 	if err != nil {
 		log.Printf("[ERRO] format_document_abnt: %v", err)
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
@@ -1161,44 +1169,6 @@ func handleUpdateLatexSection(ctx context.Context, request mcplib.CallToolReques
 	return mcplib.NewToolResultText(msg), nil
 }
 
-// ─── Tool 23: normalize_doc_structure ──────────────────────────────────────
-
-func registerNormalizeDocStructure(s *server.MCPServer) {
-	tool := mcplib.NewTool("normalize_doc_structure",
-		mcplib.WithDescription(
-			"Operação unificada com format_document_abnt (motor soberano ABNT in-place): "+
-				"Padroniza títulos na hierarquia NBR 6024 rigorosa (12pt), desfragmenta quebras de linha duras de 80 colunas copiadas do LaTeX, "+
-				"elimina linhas em branco excessivas consecutivas, limpa comandos LaTeX vazados, protege tabelas e comentários, "+
-				"formata Capa/Folha de Rosto sem recuo indevido, Referências à esquerda com espaço simples e corpo com recuo 1,25cm e entrelinhas 1.5."),
-		mcplib.WithString("document_url_or_id",
-			mcplib.Required(),
-			mcplib.Description("URL completa do Google Docs ou apenas o ID do documento"),
-		),
-		mcplib.WithBoolean("apply_margins",
-			mcplib.Description("Se true, configura margens ABNT 3/3/2/2 cm na folha A4 (padrão: true)"),
-		),
-		mcplib.WithBoolean("clean_latex_commands",
-			mcplib.Description("Se true, higieniza comandos LaTeX vazados (ex: \\chapter, \\label) (padrão: true)"),
-		),
-		mcplib.WithBoolean("collapse_blank_lines",
-			mcplib.Description("Se true, elimina linhas em branco excessivas consecutivas no corpo do documento (padrão: true)"),
-		),
-		mcplib.WithBoolean("heal_broken_lines",
-			mcplib.Description("Se true, desfragmenta quebras de 80 colunas unindo frases fragmentadas em parágrafos normais (padrão: true)"),
-		),
-		mcplib.WithString("font_family",
-			mcplib.Description("Família de fonte ABNT (opcional, padrão: 'Arial'; permitido: 'Times New Roman')"),
-		),
-	)
-	s.AddTool(tool, handleNormalizeDocStructure)
-	log.Println("[INFO] Ferramenta registrada: normalize_doc_structure (unificada com format_document_abnt)")
-}
-
-func handleNormalizeDocStructure(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	// normalize_doc_structure e format_document_abnt são rigorosamente unificadas no mesmo motor soberano
-	return handleFormatDocumentAbnt(ctx, request)
-}
-
 // ─── Tool 24: sync_section_to_doc ──────────────────────────────────────────
 
 func registerSyncSectionToDoc(s *server.MCPServer) {
@@ -1259,35 +1229,48 @@ func handleSyncSectionToDoc(ctx context.Context, request mcplib.CallToolRequest)
 func registerResetDocToTemplate(s *server.MCPServer) {
 	tool := mcplib.NewTool("reset_doc_to_template",
 		mcplib.WithDescription(
-			"ATENÇÃO: Operação destrutiva sob demanda explícita. Limpa o documento e o inicializa com o esqueleto oficial do Template ABNT/IFS (resources/template). Utilize apenas para novos documentos ou quando solicitado conscientemente."),
+			"Cria um novo documento ou reseta um existente com o Template Canônico Oficial ABNT/IFS (fiel ao main.pdf / config.tex): "+
+				"insere a logo oficial do IFS (3.2cm centralizada), cabeçalho institucional em caixa alta/negrito, autor, título, "+
+				"quebras de página, Folha de Rosto com nota de apresentação à direita (recuo 7.5cm) e capítulos estruturais. "+
+				"Se 'document_url_or_id' for omitido ou 'new', cria um documento novo diretamente no Google Drive."),
 		mcplib.WithString("document_url_or_id",
-			mcplib.Required(),
-			mcplib.Description("URL completa do Google Docs ou apenas o ID do documento"),
+			mcplib.Description("URL do Google Docs, ID para reset ou 'new' para criar novo documento (opcional, padrão: 'new')"),
+		),
+		mcplib.WithString("metadata_path",
+			mcplib.Description("Caminho do metadados.tex para extrair título, autor e orientador (opcional, padrão: 'resources/tcc/metadados.tex')"),
 		),
 		mcplib.WithString("template_dir",
 			mcplib.Description("Diretório do template canônico (opcional, padrão: 'resources/template')"),
 		),
+		mcplib.WithString("logo_path",
+			mcplib.Description("Caminho local ou URL pública para a imagem do logo da capa (opcional, padrão: 'assets/logo_ifs.png' ou 'logo_ifs.png')"),
+		),
 	)
 	s.AddTool(tool, handleResetDocToTemplate)
-	log.Println("[INFO] Ferramenta registrada: reset_doc_to_template")
+	log.Println("[INFO] Ferramenta registrada: reset_doc_to_template (criador e inicializador oficial IFS)")
 }
 
 func handleResetDocToTemplate(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	input, err := request.RequireString("document_url_or_id")
-	if err != nil {
-		return mcplib.NewToolResultError("Parâmetro 'document_url_or_id' é obrigatório."), nil
-	}
-
+	input := request.GetString("document_url_or_id", "new")
 	tplDir := request.GetString("template_dir", "resources/template")
+	metaPath := request.GetString("metadata_path", "resources/tcc/metadados.tex")
+	logoPath := request.GetString("logo_path", "")
 
-	docID, err := gdocs.ExtractAndValidateDocID(ctx, input)
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	docID := ""
+	trimmedInput := strings.TrimSpace(input)
+	if trimmedInput != "" && strings.ToLower(trimmedInput) != "new" {
+		var errVal error
+		docID, errVal = gdocs.ExtractAndValidateDocID(ctx, trimmedInput)
+		if errVal != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", errVal)), nil
+		}
+	} else {
+		docID = "new"
 	}
 
-	log.Printf("[INFO] reset_doc_to_template → doc: %s | template: %s", docID, tplDir)
+	log.Printf("[INFO] reset_doc_to_template → doc: %s | template: %s | meta: %s | logo: %s", docID, tplDir, metaPath, logoPath)
 
-	msg, err := gdocs.ResetDocToTemplate(ctx, docID, tplDir)
+	msg, err := gdocs.ResetDocToTemplate(ctx, docID, tplDir, metaPath, logoPath)
 	if err != nil {
 		log.Printf("[ERRO] reset_doc_to_template: %v", err)
 		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil

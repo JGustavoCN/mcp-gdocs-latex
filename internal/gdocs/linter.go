@@ -10,6 +10,8 @@ import (
 
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/googleapi"
+
+	"github.com/JGustavoCN/mcp-gdocs-latex/internal/latex"
 )
 
 // ReviewHighlightItem detalha um trecho com marca-texto / grifo de revisão deixado pelo orientador/revisor
@@ -111,6 +113,7 @@ type LintReport struct {
 	TextColorAnomalies        []TextColorAnomalyItem   `json:"text_color_anomalies,omitempty"`
 	StructuralOrderViolations []OrderViolationItem     `json:"structural_order_violations,omitempty"`
 	MisplacedElements         []string                 `json:"misplaced_elements,omitempty"`
+	CoverStatus               string                   `json:"cover_status,omitempty"`
 	LatexSyntaxLeaks          []LatexLeakItem          `json:"latex_syntax_leaks,omitempty"`
 	DoubleSpacingAnomalies    []DoubleSpaceAnomalyItem `json:"double_spacing_anomalies,omitempty"`
 	ParagraphQualityAnomalies []ParagraphQualityItem   `json:"paragraph_quality_anomalies,omitempty"`
@@ -133,7 +136,7 @@ type LintOptions struct {
 }
 
 var (
-	reLatexCmdInText    = regexp.MustCompile(`(?i)\\(?:chapter|section|subsection|subsubsection|label|begin|end|ref|cite|textcite|caption|centering|hline|toprule|midrule|bottomrule|textit|textbf|path|times|ge|le|neq|textordmasculine|textordfeminine)\*?(?:[{(][^})]*[})]?|\[[^\]]*\]|\{[^}]*\})?`)
+	reLatexCmdInText    = regexp.MustCompile(`(?i)\\(?:chapter|section|subsection|subsubsection|label|begin|end|ref|cite|textcite|caption|centering|hline|toprule|midrule|bottomrule|textit|textbf|texttt|allowbreak|url|path|verb|footnote|hfill|newline|times|ge|le|neq|textordmasculine|textordfeminine|item)\*?(?:\{[^}\n]*\}|\{[^}\n]*\)|\[[^\]\n]*\])?`)
 	reMathSyntaxInText  = regexp.MustCompile(`\$[^$]+\$`)
 	reDoubleSpace       = regexp.MustCompile(` {2,}`)
 	reSpaceBeforePunct  = regexp.MustCompile(`\s+([,;.:!?])`)
@@ -256,6 +259,7 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 	for i, el := range doc.Body.Content {
 		// 1. Análise de Tabelas
 		if el.Table != nil {
+			consecutiveEmptyParas = 0 // CRÍTICO: Tabelas nativas zeram a contagem de parágrafos vazios para evitar falsos positivos
 			report.TotalTables++
 			t := el.Table
 			rows := len(t.TableRows)
@@ -547,16 +551,18 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 
 			// 2.6 Auditoria de Vazamentos LaTeX (comandos, matemática, til, tags)
 			if opts.CheckLatexLeaks && trimmed != "" {
-				// Comandos LaTeX
-				if m := reLatexCmdInText.FindString(pText); m != "" {
-					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
-						ElementIndex: i,
-						StartIndex:   el.StartIndex,
-						EndIndex:     el.EndIndex,
-						LeakType:     "Comando LaTeX residual",
-						Snippet:      m,
-						Suggestion:   "Remover comando ou converter para texto/estilo nativo do Google Docs.",
-					})
+				// Comandos LaTeX residuais (incluindo macros inline e fechamentos mistos)
+				if matches := reLatexCmdInText.FindAllString(pText, -1); len(matches) > 0 {
+					for _, m := range matches {
+						report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+							ElementIndex: i,
+							StartIndex:   el.StartIndex,
+							EndIndex:     el.EndIndex,
+							LeakType:     "Comando LaTeX residual",
+							Snippet:      m,
+							Suggestion:   "Remover comando ou converter para texto/estilo nativo do Google Docs.",
+						})
+					}
 				}
 
 				// Sintaxe Matemática $...$
@@ -671,7 +677,8 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 
 				if !isCaptionOrSource && !isBullet && !isPreTextualNote(trimmed) && trimmed != "" {
 					runeLen := utf8.RuneCountInString(trimmed)
-					if runeLen < 100 && !strings.Contains(trimmed, "[TABELA]") {
+					isSubheadingOrStage := strings.HasPrefix(trimmed, "Etapa de ") || strings.HasPrefix(trimmed, "Fase de ")
+					if runeLen < 100 && !strings.Contains(trimmed, "[TABELA]") && !isSubheadingOrStage {
 						report.ParagraphQualityAnomalies = append(report.ParagraphQualityAnomalies, ParagraphQualityItem{
 							ElementIndex: i,
 							StartIndex:   el.StartIndex,
@@ -700,12 +707,17 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			}
 
 			// Parágrafo vazio ou quebra múltipla
+			// ABNT NBR 14724: Espaçamentos verticais na Capa e Folha de Rosto (elementos pré-textuais)
+			// são canônicos e regulamentares para distribuição dos blocos. A auditoria de quebras
+			// excessivas atua estritamente na parte textual e pós-textual para evitar falsos positivos.
 			if trimmed == "" {
-				consecutiveEmptyParas++
-				if consecutiveEmptyParas >= 2 {
-					report.ConsecutiveBlankLines = append(report.ConsecutiveBlankLines,
-						fmt.Sprintf("Elemento %d [%d-%d]: Quebra múltipla / Linha em branco excessiva (#%d)",
-							i, el.StartIndex, el.EndIndex, consecutiveEmptyParas))
+				if currentState != statePreTextual {
+					consecutiveEmptyParas++
+					if consecutiveEmptyParas >= 2 {
+						report.ConsecutiveBlankLines = append(report.ConsecutiveBlankLines,
+							fmt.Sprintf("Elemento %d [%d-%d]: Quebra múltipla / Linha em branco excessiva (#%d)",
+								i, el.StartIndex, el.EndIndex, consecutiveEmptyParas))
+					}
 				}
 			} else {
 				consecutiveEmptyParas = 0
@@ -732,6 +744,331 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 					fmt.Sprintf("Elemento %d [%d-%d]: Quebra manual (\\u000b) -> %q",
 						i, el.StartIndex, el.EndIndex, snippet))
 			}
+		}
+	}
+
+	// 2.10 Auditoria da Capa Oficial IFS e Folha de Rosto (NBR 14724 + config.tex)
+	if opts.CheckStructuralOrder {
+		hasCover, hasLogo, hasTitlePage := HasABNTCoverAndLogo(doc)
+		var coverIssues []string
+
+		if !hasCover {
+			coverIssues = append(coverIssues, "Capa institucional com dados de identificação ausente")
+		}
+		if !hasLogo {
+			coverIssues = append(coverIssues, "Logo oficial do IFS (3.2cm) não localizada no topo")
+		}
+		if !hasTitlePage {
+			coverIssues = append(coverIssues, "Folha de Rosto com nota institucional ausente")
+		}
+
+		// Se os elementos básicos existirem, audita alinhamentos, quebras de página e regras de formatação
+		if hasCover && hasLogo && hasTitlePage {
+			// Carrega metadados oficiais para comparar se há coorientador
+			meta, _ := latex.ParseTCCMetadata("")
+
+			// Máquina de auditoria estrita de páginas pré-textuais NBR 14724
+			inCover := true
+			coverYearFound := false
+			coverYearEndIndex := int64(-1)
+			coverHasPageBreak := false
+			titlePageYearFound := false
+			titlePageHasPageBreak := false
+			titlePageStarted := false
+
+			for idx, el := range doc.Body.Content {
+				if firstChapterIndex >= 0 && idx >= firstChapterIndex {
+					break
+				}
+				if el.Paragraph != nil {
+					p := el.Paragraph
+					align := ""
+					indentStart := float64(0)
+					indentFirstLine := float64(0)
+					if p.ParagraphStyle != nil {
+						align = p.ParagraphStyle.Alignment
+						if p.ParagraphStyle.IndentStart != nil {
+							indentStart = p.ParagraphStyle.IndentStart.Magnitude
+						}
+						if p.ParagraphStyle.IndentFirstLine != nil {
+							indentFirstLine = p.ParagraphStyle.IndentFirstLine.Magnitude
+						}
+					}
+
+					pText := ""
+					hasInline := false
+					pHasBreak := false
+					for _, pEl := range p.Elements {
+						if pEl.TextRun != nil {
+							pText += pEl.TextRun.Content
+						}
+						if pEl.InlineObjectElement != nil {
+							hasInline = true
+						}
+						if pEl.PageBreak != nil {
+							pHasBreak = true
+						}
+					}
+					trimmed := strings.TrimSpace(pText)
+
+					// Audita alinhamento da Logo no topo da Capa
+					if hasInline {
+						if align != "CENTER" {
+							coverIssues = append(coverIssues, "Logo oficial do IFS não está centralizada no topo da Capa")
+							report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+								ElementIndex: idx,
+								StartIndex:   el.StartIndex,
+								EndIndex:     el.EndIndex,
+								SectionTitle: "Logo Oficial IFS",
+								Severity:     "ALERTA",
+								RuleViolated: "ABNT NBR 14724 / IFS config.tex: Logo oficial deve estar rigorosamente centralizada no topo da Capa",
+								Details:      "O parágrafo da logo está com alinhamento '" + align + "'. Execute 'format_document_abnt' para centralizar.",
+							})
+						}
+					}
+
+					if inCover {
+						// Estamos na Página 1 (Capa)
+						if trimmed == "2026" || (meta != nil && trimmed == strings.TrimSpace(meta.Data)) {
+							coverYearFound = true
+							coverYearEndIndex = el.EndIndex
+							if pHasBreak {
+								coverHasPageBreak = true
+								inCover = false
+							}
+						} else if coverYearFound {
+							// Se já encontrou o ano da Capa e não houve quebra de página, qualquer texto aqui vazou para a página 1!
+							if pHasBreak {
+								coverHasPageBreak = true
+								inCover = false
+							} else if trimmed != "" {
+								coverIssues = append(coverIssues, fmt.Sprintf("Elemento indevido vazou para a Capa (Página 1): %q", trimmed))
+								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+									ElementIndex: idx,
+									StartIndex:   el.StartIndex,
+									EndIndex:     el.EndIndex,
+									SectionTitle: "Capa (Página 1)",
+									Severity:     "ALERTA",
+									RuleViolated: "ABNT NBR 14724: A Capa deve conter exclusivamente Logo, Instituição, Autor, Título, Local e Ano, finalizando com Quebra de Página",
+									Details:      fmt.Sprintf("O texto %q apareceu antes da Quebra de Página da Capa. Execute 'format_document_abnt' para inserir a quebra.", trimmed),
+								})
+								inCover = false // Força transição para auditar o restante como Folha de Rosto
+							}
+						}
+					} else {
+						// Estamos na Página 2 (Folha de Rosto)
+						if !titlePageStarted && trimmed != "" {
+							titlePageStarted = true
+							// Primeiro elemento de texto deve ser o Autor
+							if meta != nil && !strings.EqualFold(trimmed, strings.TrimSpace(meta.Autor)) && !strings.Contains(strings.ToUpper(trimmed), "JOSÉ GUSTAVO") {
+								coverIssues = append(coverIssues, fmt.Sprintf("A Folha de Rosto deve iniciar com o Nome do Autor no topo da Página 2 (iniciou com %q)", trimmed))
+								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+									ElementIndex: idx,
+									StartIndex:   el.StartIndex,
+									EndIndex:     el.EndIndex,
+									SectionTitle: "Folha de Rosto (Página 2)",
+									Severity:     "ALERTA",
+									RuleViolated: "ABNT NBR 14724: A Folha de Rosto deve iniciar com o Nome do Autor no topo da Página 2",
+									Details:      "Verifique se o nome do autor não vazou para o rodapé da Capa por falta de Quebra de Página.",
+								})
+							}
+						}
+
+						// Audita nota institucional da folha de rosto
+						if strings.HasPrefix(trimmed, "Trabalho de Conclusão de Curso apresentado") ||
+							strings.Contains(trimmed, "requisito parcial para obtenção") {
+							if !strings.Contains(trimmed, "obtenção do grau") {
+								coverIssues = append(coverIssues, "Nota institucional da Folha de Rosto está incompleta/truncada")
+								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+									ElementIndex: idx,
+									StartIndex:   el.StartIndex,
+									EndIndex:     el.EndIndex,
+									SectionTitle: "Folha de Rosto (Nota de Apresentação Incompleta)",
+									Severity:     "ALERTA",
+									RuleViolated: "ABNT NBR 14724 / metadados.tex: A nota institucional deve conter o preâmbulo completo com curso, campus e objetivo do grau",
+									Details:      "O texto da nota foi cortado antes da conclusão. Execute 'format_document_abnt' para restaurar o preâmbulo completo.",
+								})
+							}
+							if indentStart < 200.0 || indentFirstLine < 200.0 || align != "JUSTIFIED" {
+								coverIssues = append(coverIssues, "Nota institucional da Folha de Rosto sem recuo de 8.0cm à direita / justificado (ou 1ª linha desalinhada)")
+								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+									ElementIndex: idx,
+									StartIndex:   el.StartIndex,
+									EndIndex:     el.EndIndex,
+									SectionTitle: "Folha de Rosto (Nota de Apresentação)",
+									Severity:     "ALERTA",
+									RuleViolated: "ABNT NBR 14724: Nota de apresentação deve possuir recuo de 8.0cm à esquerda (metade da página) com 1ª linha alinhada e texto justificado",
+									Details:      fmt.Sprintf("Recuo corpo: %.1f pt, Recuo 1ª linha: %.1f pt (esperado: >= 212.6 pt / 8.0cm).", indentStart, indentFirstLine),
+								})
+							}
+						}
+
+						// Audita alinhamento do Orientador na folha de rosto
+						if strings.HasPrefix(trimmed, "Orientador:") || strings.HasPrefix(trimmed, "Orientadora:") {
+							if indentStart < 200.0 || indentFirstLine < 200.0 {
+								coverIssues = append(coverIssues, "Orientador na Folha de Rosto não está alinhado à direita junto ao bloco da nota institucional")
+								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+									ElementIndex: idx,
+									StartIndex:   el.StartIndex,
+									EndIndex:     el.EndIndex,
+									SectionTitle: "Folha de Rosto (Orientador)",
+									Severity:     "ALERTA",
+									RuleViolated: "ABNT NBR 14724: O Orientador deve ser formatado no mesmo alinhamento de bloco à direita da nota de apresentação (recuo 8.0cm)",
+									Details:      fmt.Sprintf("Recuo corpo: %.1f pt, Recuo 1ª linha: %.1f pt (esperado: >= 212.6 pt / 8.0cm).", indentStart, indentFirstLine),
+								})
+							}
+						}
+
+						// Audita coorientador fake / placeholder
+						if strings.Contains(trimmed, "Nome do Coorientador") ||
+							(meta != nil && meta.Coorientador == "" && strings.HasPrefix(trimmed, "Coorientador:")) {
+							coverIssues = append(coverIssues, "Folha de Rosto contém menção a Coorientador inexistente nos metadados")
+							report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+								ElementIndex: idx,
+								StartIndex:   el.StartIndex,
+								EndIndex:     el.EndIndex,
+								SectionTitle: "Folha de Rosto (Coorientador)",
+								Severity:     "ALERTA",
+								RuleViolated: "Coorientador é opcional e não consta ativo no metadados.tex",
+								Details:      fmt.Sprintf("Remova a linha %q ou configure o coorientador real em metadados.tex.", trimmed),
+							})
+						}
+
+						// Encerramento da Folha de Rosto
+						if trimmed == "2026" || (meta != nil && trimmed == strings.TrimSpace(meta.Data)) {
+							titlePageYearFound = true
+							if pHasBreak {
+								titlePageHasPageBreak = true
+							}
+						} else if titlePageYearFound {
+							if pHasBreak {
+								titlePageHasPageBreak = true
+							} else if (trimmed == "RESUMO" || strings.HasPrefix(trimmed, "RESUMO")) && !titlePageHasPageBreak {
+								coverIssues = append(coverIssues, "Ausência de Quebra de Página após a Folha de Rosto (RESUMO está na mesma página)")
+								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+									ElementIndex: idx,
+									StartIndex:   el.StartIndex,
+									EndIndex:     el.EndIndex,
+									SectionTitle: "Folha de Rosto / RESUMO",
+									Severity:     "ALERTA",
+									RuleViolated: "ABNT NBR 14724: A Folha de Rosto deve encerrar com Quebra de Página, iniciando o RESUMO na Página 3",
+									Details:      "O RESUMO apareceu sem que houvesse Quebra de Página após o Ano da Folha de Rosto.",
+								})
+							}
+						}
+					}
+				}
+			}
+
+			// Verificação das quebras regulamentares na Folha de Rosto (7 entre Autor e Título; 5 entre Título e Preâmbulo)
+			if coverYearFound && coverYearEndIndex > 0 {
+				var autorFREl, tituloFREl, preambuloFREl *docs.StructuralElement
+				for _, el := range doc.Body.Content {
+					if el.StartIndex <= coverYearEndIndex {
+						continue
+					}
+					if el.Paragraph != nil {
+						txt := ""
+						for _, pel := range el.Paragraph.Elements {
+							if pel.TextRun != nil {
+								txt += pel.TextRun.Content
+							}
+						}
+						trim := strings.TrimSpace(txt)
+						if trim == "" {
+							continue
+						}
+						if autorFREl == nil && (strings.Contains(strings.ToUpper(trim), "JOSÉ GUSTAVO") || (meta != nil && strings.EqualFold(trim, strings.ToUpper(meta.Autor)))) {
+							autorFREl = el
+							continue
+						}
+						if autorFREl != nil && tituloFREl == nil && (strings.Contains(strings.ToUpper(trim), "AVALIAÇÃO DE UMA") || (meta != nil && strings.EqualFold(trim, strings.ToUpper(meta.Titulo)))) {
+							tituloFREl = el
+							continue
+						}
+						if tituloFREl != nil && preambuloFREl == nil && (strings.HasPrefix(trim, "Trabalho de Conclusão") || isPreTextualNote(trim)) {
+							preambuloFREl = el
+							break
+						}
+					}
+				}
+
+				if autorFREl != nil && tituloFREl != nil {
+					emptyAT := 0
+					for _, el := range doc.Body.Content {
+						if el.StartIndex >= autorFREl.EndIndex && el.EndIndex <= tituloFREl.StartIndex {
+							if el.Paragraph != nil {
+								t := ""
+								for _, pel := range el.Paragraph.Elements {
+									if pel.TextRun != nil {
+										t += pel.TextRun.Content
+									}
+								}
+								if strings.TrimSpace(t) == "" {
+									emptyAT++
+								}
+							}
+						}
+					}
+					if emptyAT != 7 {
+						coverIssues = append(coverIssues, fmt.Sprintf("Folha de Rosto: espaçamento entre Autor e Título irregular (%d quebras; esperado: exatamente 7)", emptyAT))
+						report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+							ElementIndex: 0,
+							StartIndex:   autorFREl.StartIndex,
+							EndIndex:     tituloFREl.EndIndex,
+							SectionTitle: "Folha de Rosto (Espaçamento Autor -> Título)",
+							Severity:     "ALERTA",
+							RuleViolated: "ABNT NBR 14724: Devem existir exatamente 7 quebras de linhas entre o Nome do Autor e o Título do Trabalho na Folha de Rosto",
+							Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para calibrar para 7.", emptyAT),
+						})
+					}
+				}
+
+				if tituloFREl != nil && preambuloFREl != nil {
+					emptyTP := 0
+					for _, el := range doc.Body.Content {
+						if el.StartIndex >= tituloFREl.EndIndex && el.EndIndex <= preambuloFREl.StartIndex {
+							if el.Paragraph != nil {
+								t := ""
+								for _, pel := range el.Paragraph.Elements {
+									if pel.TextRun != nil {
+										t += pel.TextRun.Content
+									}
+								}
+								if strings.TrimSpace(t) == "" {
+									emptyTP++
+								}
+							}
+						}
+					}
+					if emptyTP != 5 {
+						coverIssues = append(coverIssues, fmt.Sprintf("Folha de Rosto: espaçamento entre Título e Preâmbulo irregular (%d quebras; esperado: exatamente 5)", emptyTP))
+						report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+							ElementIndex: 0,
+							StartIndex:   tituloFREl.StartIndex,
+							EndIndex:     preambuloFREl.EndIndex,
+							SectionTitle: "Folha de Rosto (Espaçamento Título -> Preâmbulo)",
+							Severity:     "ALERTA",
+							RuleViolated: "ABNT NBR 14724: Devem existir exatamente 5 quebras de linhas entre o Título e a Nota de Apresentação / Preâmbulo",
+							Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para calibrar para 5.", emptyTP),
+						})
+					}
+				}
+			}
+
+			// Verificações finais de presença de quebra de página
+			if coverYearFound && !coverHasPageBreak {
+				coverIssues = append(coverIssues, "Ausência de Quebra de Página obrigatória (NBR 14724) após o Ano da Capa")
+			}
+			if titlePageYearFound && !titlePageHasPageBreak {
+				coverIssues = append(coverIssues, "Ausência de Quebra de Página obrigatória (NBR 14724) após o Ano da Folha de Rosto")
+			}
+		}
+
+		if len(coverIssues) > 0 {
+			report.CoverStatus = "Incompleta ou Desalinhada (" + strings.Join(coverIssues, "; ") + ")"
+		} else {
+			report.CoverStatus = "Capa Oficial IFS com Logo (3.2cm centralizada) e Folha de Rosto NBR 14724 em plena conformidade."
 		}
 	}
 

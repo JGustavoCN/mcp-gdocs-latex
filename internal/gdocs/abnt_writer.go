@@ -38,8 +38,14 @@ func cleanLatexInlineText(s string) string {
 	s = regexp.MustCompile(`\$([^$]+)\$`).ReplaceAllString(s, "$1")
 
 	// 2. Comandos LaTeX inline
+	s = regexp.MustCompile(`([-/])\s*\\allowbreak\s*`).ReplaceAllString(s, "$1")
+	s = regexp.MustCompile(`\\allowbreak\s*`).ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, `\newline`, " ")
+	s = strings.ReplaceAll(s, `\hfill`, " ")
 	s = regexp.MustCompile(`\\ref\{([^})]+)[})]`).ReplaceAllString(s, "$1")
 	s = regexp.MustCompile(`\\path\{([^})]+)[})]`).ReplaceAllString(s, "$1")
+	s = regexp.MustCompile(`\\texttt\{([^})]+)[})]`).ReplaceAllString(s, "$1")
+	s = regexp.MustCompile(`\\url\{([^})]+)[})]`).ReplaceAllString(s, "$1")
 	s = regexp.MustCompile(`\\cite(?:\*?\[[^\]]*\])?\{([^})]+)[})]`).ReplaceAllString(s, "($1)")
 	s = regexp.MustCompile(`\\textcite\{([^})]+)[})]`).ReplaceAllString(s, "$1")
 	s = regexp.MustCompile(`\\textit\{([^}]+)\}?`).ReplaceAllString(s, "$1")
@@ -119,9 +125,9 @@ func shouldMergeParagraphs(t1, t2 string, isSpecial1, isSpecial2 bool) bool {
 		return false
 	}
 
-	// Se p2 começar com letra minúscula ou pontuação de continuação
+	// Se p2 começar com letra minúscula ou pontuação de continuação (inclusive parêntese de explicação)
 	firstRune, _ := utf8.DecodeRuneInString(t2)
-	if unicode.IsLower(firstRune) || firstRune == ',' || firstRune == ')' || firstRune == ';' {
+	if unicode.IsLower(firstRune) || firstRune == ',' || firstRune == ')' || firstRune == ';' || firstRune == '(' {
 		return true
 	}
 
@@ -135,10 +141,16 @@ func shouldMergeParagraphs(t1, t2 string, isSpecial1, isSpecial2 bool) bool {
 			"em": true, "no": true, "na": true, "nos": true, "nas": true, "para": true,
 			"por": true, "pelo": true, "pela": true, "com": true, "que": true, "como": true,
 			"ao": true, "à": true, "aos": true, "às": true, "sob": true, "sobre": true,
+			"organização": true, "requerente": true, "regulamento": true,
 		}
 		if connectives[lastWord] || strings.HasSuffix(t1, ",") || strings.HasSuffix(t1, "-") {
 			return true
 		}
+	}
+
+	// Se p1 for uma alínea/item ou texto descritivo sem pontuação final e p2 for um complemento curto
+	if !strings.HasSuffix(t1, ".") && !strings.HasSuffix(t1, ";") && !strings.HasSuffix(t1, ":") && len(t2) < 90 {
+		return true
 	}
 
 	return false
@@ -164,8 +176,9 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 		return 0, 0, nil
 	}
 
-	// 1. Identifica o início do primeiro capítulo
-	firstChapterIndex := int64(-1)
+	// 1. Identifica o ponto de corte: após a Página 2 (Folha de Rosto) ou início do 1º capítulo
+	targetStartIndex := int64(-1)
+	anoCount := 0
 	for _, el := range doc.Body.Content {
 		if el.Paragraph != nil {
 			pText := ""
@@ -175,15 +188,26 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 				}
 			}
 			trimmed := strings.TrimSpace(pText)
+			if trimmed == "2026" {
+				anoCount++
+				if anoCount == 2 {
+					targetStartIndex = el.EndIndex
+				}
+			}
+			if targetStartIndex < 0 && (trimmed == "RESUMO" || trimmed == "# RESUMO") {
+				targetStartIndex = el.StartIndex
+			}
 			if rePrimaryHeadingNum.MatchString(trimmed) || trimmed == "1 INTRODUÇÃO" {
-				firstChapterIndex = el.StartIndex
+				if targetStartIndex < 0 {
+					targetStartIndex = el.StartIndex
+				}
 				break
 			}
 		}
 	}
 
-	if firstChapterIndex < 0 {
-		return 0, 0, nil
+	if targetStartIndex < 0 {
+		targetStartIndex = 1
 	}
 
 	healedLinesCount := 0
@@ -198,7 +222,7 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 			elA := content[i]
 			elB := content[i+1]
 
-			if elA.StartIndex < firstChapterIndex {
+			if elA.StartIndex < targetStartIndex {
 				continue
 			}
 
@@ -288,55 +312,68 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 		}
 	}
 
-	// 3. Colapso de Linhas em Branco Consecutivas no Corpo (collapseBlankLines)
+	// 3. Colapso de Linhas em Branco Consecutivas a partir da Página 3 (collapseBlankLines)
 	if collapseBlankLines {
-		var blankReqs []*docs.Request
-		bodyEnd := getBodyEndIndex(doc)
-
 		content := doc.Body.Content
-		for i := len(content) - 1; i >= 0; i-- {
+		bodyEnd := content[len(content)-1].EndIndex
+
+		consecutiveBlanks := 0
+		var toDeleteRanges []*docs.Range
+
+		for i := 0; i < len(content); i++ {
 			el := content[i]
-			if el.StartIndex < firstChapterIndex {
+			if el.StartIndex < targetStartIndex || el.EndIndex >= bodyEnd {
 				continue
 			}
-			if el.EndIndex >= bodyEnd {
+
+			if el.Table != nil {
+				consecutiveBlanks = 0
 				continue
 			}
 
 			if el.Paragraph != nil {
-				pText := ""
-				for _, pEl := range el.Paragraph.Elements {
-					if pEl.TextRun != nil {
-						pText += pEl.TextRun.Content
+				txt := ""
+				for _, pel := range el.Paragraph.Elements {
+					if pel.TextRun != nil {
+						txt += pel.TextRun.Content
 					}
 				}
-				if strings.TrimSpace(pText) == "" && el.EndIndex > el.StartIndex {
-					blankReqs = append(blankReqs, &docs.Request{
-						DeleteContentRange: &docs.DeleteContentRangeRequest{
-							Range: &docs.Range{
+				t := strings.TrimSpace(txt)
+				if t == "" {
+					consecutiveBlanks++
+					if consecutiveBlanks >= 2 {
+						// Não deleta se for parágrafo obrigatório antes de tabela
+						isBeforeTable := false
+						if i+1 < len(content) && content[i+1].Table != nil {
+							isBeforeTable = true
+						}
+						if !isBeforeTable {
+							toDeleteRanges = append(toDeleteRanges, &docs.Range{
 								StartIndex: el.StartIndex,
 								EndIndex:   el.EndIndex,
-							},
-						},
-					})
-					collapsedBlanksCount++
+							})
+						}
+					}
+				} else {
+					consecutiveBlanks = 0
 				}
 			}
 		}
 
-		if len(blankReqs) > 0 {
-			batchSize := 200
-			for start := 0; start < len(blankReqs); start += batchSize {
-				end := start + batchSize
-				if end > len(blankReqs) {
-					end = len(blankReqs)
-				}
-				chunk := blankReqs[start:end]
-				_, errBlank := svc.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{Requests: chunk}).Do()
-				if errBlank != nil {
-					log.Printf("[AVISO] HealDocTextAndBlanks (blanks): %v", errBlank)
-					break
-				}
+		// Deleta de trás para frente individualmente para manter a integridade dos índices
+		for i := len(toDeleteRanges) - 1; i >= 0; i-- {
+			r := toDeleteRanges[i]
+			req := &docs.BatchUpdateDocumentRequest{
+				Requests: []*docs.Request{
+					{
+						DeleteContentRange: &docs.DeleteContentRangeRequest{
+							Range: r,
+						},
+					},
+				},
+			}
+			if _, errDel := svc.Documents.BatchUpdate(documentID, req).Do(); errDel == nil {
+				collapsedBlanksCount++
 			}
 		}
 	}
@@ -418,22 +455,18 @@ func FormatDocumentABNT(ctx context.Context, documentID string, startIndex, endI
 	if len(cleanLatex) > 0 {
 		cleanLatexCmds = cleanLatex[0]
 	}
-	return FormatDocumentABNTExtended(ctx, documentID, startIndex, endIndex, applyMargins, cleanLatexCmds, ABNTDefaultFontFamily)
+	return FormatDocumentABNTExtended(ctx, documentID, startIndex, endIndex, applyMargins, cleanLatexCmds, ABNTDefaultFontFamily, true, true, false)
 }
 
 // FormatDocumentABNTExtended formata o documento aplicando família de fonte unificada e todas as regras ABNT
-func FormatDocumentABNTExtended(ctx context.Context, documentID string, startIndex, endIndex int64, applyMargins bool, cleanLatexCmds bool, fontFamily string, opts ...bool) (string, error) {
+func FormatDocumentABNTExtended(ctx context.Context, documentID string, startIndex, endIndex int64, applyMargins bool, cleanLatexCmds bool, fontFamily string, collapseBlankLines, healBrokenLines, ensureCover bool, customLogoPath ...string) (string, error) {
 	if fontFamily == "" {
 		fontFamily = ABNTDefaultFontFamily
 	}
 
-	collapseBlankLines := true
-	healBrokenLines := true
-	if len(opts) > 0 {
-		collapseBlankLines = opts[0]
-	}
-	if len(opts) > 1 {
-		healBrokenLines = opts[1]
+	logoImgPath := ""
+	if len(customLogoPath) > 0 && customLogoPath[0] != "" {
+		logoImgPath = customLogoPath[0]
 	}
 
 	svc, err := GetDocsService(ctx)
@@ -448,6 +481,32 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 
 	if doc.Body == nil || len(doc.Body.Content) == 0 {
 		return "Documento vazio.", nil
+	}
+
+	// ─── ETAPA 0: Garantia da Capa e Folha de Rosto Oficial IFS/ABNT (se solicitada) ───
+	coverStatusMsg := "Existente / Preservada"
+	if ensureCover {
+		hasCover, hasLogo, hasTitlePage := HasABNTCoverAndLogo(doc)
+		if !hasCover || !hasLogo || !hasTitlePage {
+			errCover := GenerateABNTIFSCoverAndTitlePage(ctx, documentID, nil, logoImgPath, true)
+			if errCover == nil {
+				coverStatusMsg = "Injetada com Logo oficial (3.2cm centralizada) e Folha de Rosto"
+				doc, err = svc.Documents.Get(documentID).Do()
+				if err != nil {
+					return "", fmt.Errorf("erro ao recarregar documento pós-injeção de capa: %w", err)
+				}
+			} else {
+				log.Printf("[AVISO] Injeção de capa falhou: %v", errCover)
+			}
+		}
+	}
+
+	// Assegura quebras de página estritas NBR 14724 (após Ano da Capa e após Ano da Folha de Rosto)
+	if errPbLayout := EnsurePreTextualPageBreaksAndLayout(ctx, documentID); errPbLayout == nil {
+		doc, err = svc.Documents.Get(documentID).Do()
+		if err != nil {
+			return "", fmt.Errorf("erro ao recarregar documento pós-layout pré-textual: %w", err)
+		}
 	}
 
 	// ─── ETAPA 1: Higienização de Comandos LaTeX Vazados e Normalizações Globais ───
@@ -470,6 +529,19 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "[VER IMAGEM"}, ReplaceText: ""}},
 			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "Model Context Protocol) (MCP)"}, ReplaceText: "Model Context Protocol (MCP)"}},
 			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "(Retrieval-Augmented Generation), RAG),"}, ReplaceText: "(Retrieval-Augmented Generation -- RAG),"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\allowbreak"}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\newline"}, ReplaceText: " "}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\hfill"}, ReplaceText: " "}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "Protótipo:)"}, ReplaceText: "Protótipo:"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "Experimental:)"}, ReplaceText: "Experimental:"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: ":)"}, ReplaceText: ":"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "não)"}, ReplaceText: "não"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "embeddings)"}, ReplaceText: "embeddings"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "framework)"}, ReplaceText: "framework"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "server)"}, ReplaceText: "server"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "client)"}, ReplaceText: "client"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: false, Text: "Coorientador: Prof. Nome do Coorientador\n"}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: false, Text: "Coorientador: Prof. Nome do Coorientador"}, ReplaceText: ""}},
 		}
 
 		if _, errGlob := svc.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{Requests: globalCleanReqs}).Do(); errGlob == nil {
@@ -513,8 +585,10 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 					continue
 				}
 
-				// Se tiver comando vazado inline (ex: \path{pgvector), \ref{...}, \cite{...})
-				if strings.Contains(trimmed, `\ref{`) || strings.Contains(trimmed, `\path{`) || strings.Contains(trimmed, `\cite{`) || strings.Contains(trimmed, `\textit{`) || strings.Contains(trimmed, `\textbf{`) || strings.Contains(trimmed, `$`) {
+				// Se tiver comando vazado inline (ex: \path{pgvector), \ref{...}, \cite{...}, \texttt{...}, \allowbreak)
+				if strings.Contains(trimmed, `\ref{`) || strings.Contains(trimmed, `\path{`) || strings.Contains(trimmed, `\cite{`) ||
+					strings.Contains(trimmed, `\textit{`) || strings.Contains(trimmed, `\textbf{`) || strings.Contains(trimmed, `\texttt{`) ||
+					strings.Contains(trimmed, `\url{`) || strings.Contains(trimmed, `\allowbreak`) || strings.Contains(trimmed, `$`) {
 					cleaned := cleanLatexInlineText(trimmed)
 					if cleaned != trimmed {
 						pEnd := el.EndIndex
@@ -593,6 +667,7 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 
 	// Máquina de estados contextual ABNT
 	beforeFirstChapter := true
+	inCoverPage := true
 	inReferences := false
 
 	// Cor preta padrão (#000000)
@@ -610,6 +685,9 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			knownByTitle[cleanKey] = ks
 		}
 	}
+
+	// Carrega metadados do TCC para identificação precisa de elementos pré-textuais (Autor, Título, Ano)
+	metaTCC, _ := latex.ParseTCCMetadata("")
 
 	// ─── ETAPA 3: Formatação Estrutural ABNT Elemento a Elemento ───
 	for _, el := range doc.Body.Content {
@@ -630,17 +708,22 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 				currentStyle = p.ParagraphStyle.NamedStyleType
 			}
 
-			// Coleta texto completo do parágrafo
+			// Coleta texto completo do parágrafo e inspeciona elementos inline/quebras
 			pText := ""
+			hasInline := false
+			hasPageBreak := false
 			for _, pEl := range p.Elements {
 				if pEl.TextRun != nil {
 					pText += pEl.TextRun.Content
 				}
+				if pEl.InlineObjectElement != nil {
+					hasInline = true
+				}
+				if pEl.PageBreak != nil {
+					hasPageBreak = true
+				}
 			}
 			trimmed := strings.TrimSpace(pText)
-			if trimmed == "" {
-				continue
-			}
 
 			pStart := el.StartIndex
 			pEnd := el.EndIndex
@@ -657,6 +740,45 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			pRange := &docs.Range{
 				StartIndex: pStart,
 				EndIndex:   pEnd,
+			}
+
+			// Parágrafo vazio ou exclusivo de objeto inline (ex: Logo oficial)
+			if trimmed == "" {
+				if beforeFirstChapter {
+					if hasInline {
+						// Centralização explícita da Logo oficial no topo da Capa
+						requests = append(requests, &docs.Request{
+							UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+								Range: pRange,
+								ParagraphStyle: &docs.ParagraphStyle{
+									NamedStyleType:      "NORMAL_TEXT",
+									Alignment:           "CENTER",
+									IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
+									IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
+									SpaceAbove:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
+									SpaceBelow:          &docs.Dimension{Magnitude: 14.17, Unit: "PT"}, // 0.5 cm
+									AvoidWidowAndOrphan: true,
+								},
+								Fields: "namedStyleType,alignment,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
+							},
+						})
+					} else {
+						// Linhas em branco pré-textuais: zera recuo de 1ª linha para evitar distorção
+						requests = append(requests, &docs.Request{
+							UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+								Range: pRange,
+								ParagraphStyle: &docs.ParagraphStyle{
+									NamedStyleType:  "NORMAL_TEXT",
+									Alignment:       "CENTER",
+									IndentFirstLine: &docs.Dimension{Magnitude: 0, Unit: "PT"},
+									IndentStart:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
+								},
+								Fields: "namedStyleType,alignment,indentFirstLine,indentStart",
+							},
+						})
+					}
+				}
+				continue
 			}
 
 			// Identificação hierárquica segundo NBR 6024 e ABNT 2026
@@ -902,7 +1024,14 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 				preTextualCount++
 
 				if isPreTextualNote(trimmed) {
-					// Nota de Apresentação / Orientador: Recuo à esquerda de 7.5cm, simples, 10pt
+					// Nota de Apresentação / Orientador da Folha de Rosto
+					// NBR 14724 + config.tex: Recuo à esquerda de 8.0cm (226.77 pt), alinhamento justificado, entrelinhas simples, 10pt, sem negrito
+					inCoverPage = false
+					isOrientador := strings.HasPrefix(strings.ToLower(trimmed), "orientador:") || strings.HasPrefix(strings.ToLower(trimmed), "coorientador:")
+					spAbove := float64(0)
+					if isOrientador {
+						spAbove = 14.17 // 0.5 cm como \vspace{0.5cm} do LaTeX
+					}
 					requests = append(requests, &docs.Request{
 						UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
 							Range: pRange,
@@ -910,10 +1039,10 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 								NamedStyleType:      "NORMAL_TEXT",
 								Alignment:           "JUSTIFIED",
 								LineSpacing:         ABNTLineSpacingSingle,
-								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
-								IndentStart:         &docs.Dimension{Magnitude: ABNTIndentPreTextualNotePt, Unit: "PT"}, // 7.5 cm
-								SpaceAbove:          &docs.Dimension{Magnitude: 8, Unit: "PT"},
-								SpaceBelow:          &docs.Dimension{Magnitude: 8, Unit: "PT"},
+								IndentFirstLine:     &docs.Dimension{Magnitude: ABNTIndentPreTextualNotePt, Unit: "PT"}, // 8.0 cm (igual a IndentStart para que a 1ª linha alinhe à direita no bloco)
+								IndentStart:         &docs.Dimension{Magnitude: ABNTIndentPreTextualNotePt, Unit: "PT"}, // 8.0 cm (metade da página até margem direita)
+								SpaceAbove:          &docs.Dimension{Magnitude: spAbove, Unit: "PT"},
+								SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
 								AvoidWidowAndOrphan: true,
 							},
 							Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
@@ -926,15 +1055,66 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 							TextStyle: &docs.TextStyle{
 								FontSize:           &docs.Dimension{Magnitude: ABNTFontSizeCaptionPt, Unit: "PT"}, // 10.0 pt
 								WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: fontFamily},
+								Bold:               false,
 								ForegroundColor:    blackColor,
 							},
-							Fields: "fontSize,weightedFontFamily,foregroundColor",
+							Fields: "fontSize,weightedFontFamily,bold,foregroundColor",
 						},
 					})
+				} else if inCoverPage {
+					// ── PÁGINA 1: CAPA OFICIAL IFS (config.tex \imprimircapa: \center\bfseries) ──
+					// Todos os elementos da Capa em NEGRITO e CENTRALIZADOS:
+					// Instituição, Autor, Título, Cidade e Ano
+					requests = append(requests, &docs.Request{
+						UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+							Range: pRange,
+							ParagraphStyle: &docs.ParagraphStyle{
+								NamedStyleType:      "NORMAL_TEXT",
+								Alignment:           "CENTER",
+								LineSpacing:         ABNTLineSpacing,
+								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
+								IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
+								SpaceAbove:          &docs.Dimension{Magnitude: 6, Unit: "PT"},
+								SpaceBelow:          &docs.Dimension{Magnitude: 6, Unit: "PT"},
+								AvoidWidowAndOrphan: true,
+							},
+							Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
+						},
+					})
+
+					requests = append(requests, &docs.Request{
+						UpdateTextStyle: &docs.UpdateTextStyleRequest{
+							Range: pRange,
+							TextStyle: &docs.TextStyle{
+								FontSize:           &docs.Dimension{Magnitude: ABNTFontSizeBodyPt, Unit: "PT"}, // 12.0 pt
+								WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: fontFamily},
+								Bold:               true, // SOBERANO: Todos os textos da Capa do IFS são em negrito
+								ForegroundColor:    blackColor,
+							},
+							Fields: "fontSize,weightedFontFamily,bold,foregroundColor",
+						},
+					})
+
+					// Detecta se é o ano da Capa (ex: "2026") para alternar o estado para a Folha de Rosto
+					if trimmed == "2026" || (metaTCC != nil && trimmed == strings.TrimSpace(metaTCC.Data)) || hasPageBreak {
+						inCoverPage = false
+					}
 				} else {
-					// Instituição, Autor, Título, Cidade/Ano: Centralizados, sem recuo de 1ª linha
-					isTitle := len(trimmed) > 30 && strings.ToUpper(trimmed) == trimmed && !strings.Contains(trimmed, "INSTITUTO")
-					boldTitle := isTitle
+					// ── PÁGINA 2: FOLHA DE ROSTO (config.tex \imprimirfolhaderosto) ──
+					// - Autor: Caixa Alta, SEM NEGRITO (\normalsize\MakeUppercase{\imprimirautor})
+					// - Título: Caixa Alta, COM NEGRITO (\normalsize\bfseries\MakeUppercase{\imprimirtitulo})
+					// - Local e Ano: Centralizados, SEM NEGRITO (\normalsize\imprimirdata)
+					isAuthorFR := false
+					if metaTCC != nil && (strings.EqualFold(trimmed, strings.TrimSpace(metaTCC.Autor)) || strings.EqualFold(trimmed, strings.ToUpper(strings.TrimSpace(metaTCC.Autor)))) {
+						isAuthorFR = true
+					}
+					isLocationOrYear := strings.Contains(strings.ToUpper(trimmed), "LAGARTO") || trimmed == "2026"
+					if metaTCC != nil && (strings.EqualFold(trimmed, strings.TrimSpace(metaTCC.Local)) || strings.EqualFold(trimmed, strings.TrimSpace(metaTCC.Data))) {
+						isLocationOrYear = true
+					}
+
+					// Na Folha de Rosto: Apenas o Título recebe negrito; Autor, Local e Ano são SEM NEGRITO
+					boldFR := !isAuthorFR && !isLocationOrYear
 
 					requests = append(requests, &docs.Request{
 						UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
@@ -959,7 +1139,7 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 							TextStyle: &docs.TextStyle{
 								FontSize:           &docs.Dimension{Magnitude: ABNTFontSizeBodyPt, Unit: "PT"}, // 12.0 pt
 								WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: fontFamily},
-								Bold:               boldTitle,
+								Bold:               boldFR,
 								ForegroundColor:    blackColor,
 							},
 							Fields: "fontSize,weightedFontFamily,bold,foregroundColor",
@@ -1126,11 +1306,12 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 		"- Linhas em branco excessivas eliminadas no corpo: %d\n"+
 		"- Parágrafos de Corpo (1.25cm / 1.5 / Justificado / 12pt): %d\n"+
 		"- Elementos Pré-Textuais formatados (Capa/Folha de Rosto sem recuo 1.25cm): %d\n"+
+		"- Capa e Folha de Rosto Oficial IFS (NBR 14724): %s\n"+
 		"- Referências Bibliográficas (NBR 6023 - À Esquerda / 1.0 / 12pt): %d\n"+
 		"- Legendas e Fontes (Centralizadas / 10pt / 1.0): %d\n"+
 		"- Citações Diretas Longas (Recuo 4cm / 10pt / 1.0): %d\n"+
 		"- Comandos LaTeX vazados limpos: %d\n"+
 		"- Família Tipográfica Uniforme: %s\n"+
 		"- Margens A4 (Superior 3cm, Esquerda 3cm, Inferior 2cm, Direita 2cm): %v",
-		start, end, headingsCount, healedCount, collapsedBlanks, formattedParas, preTextualCount, referencesCount, captionsCount, longQuotesCount, cleanedCommandsCount, fontFamily, applyMargins), nil
+		start, end, headingsCount, healedCount, collapsedBlanks, formattedParas, preTextualCount, coverStatusMsg, referencesCount, captionsCount, longQuotesCount, cleanedCommandsCount, fontFamily, applyMargins), nil
 }
