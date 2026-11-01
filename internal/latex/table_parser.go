@@ -22,7 +22,7 @@ var (
 	regexCaption     = regexp.MustCompile(`\\caption\{([^}]+)\}`)
 	regexLabel       = regexp.MustCompile(`\\label\{([^}]+)\}`)
 	regexFonte       = regexp.MustCompile(`(?:Fonte:|\\fonte\{)([^}\n\\]+)`)
-	regexTabular     = regexp.MustCompile(`(?s)\\begin\{tabular\}\{[^}]*\}(.*?)\\end\{tabular\}`)
+	regexTabular     = regexp.MustCompile(`(?s)\\begin\{(?:tabular|tabularx)\}(?:\{[^}]*\})*\{[^}]*\}(.*?)\\end\{(?:tabular|tabularx)\}`)
 	regexTextCite    = regexp.MustCompile(`\\textcite\{([^}]+)\}`)
 	regexCite        = regexp.MustCompile(`\\cite\{([^}]+)\}`)
 )
@@ -130,18 +130,26 @@ func CleanLaTeXText(raw string) string {
 	s = strings.ReplaceAll(s, `\_`, "_")
 	s = strings.ReplaceAll(s, `\&`, "&")
 
-	// Expressões matemáticas inline
+	// Expressões matemáticas inline e símbolos comuns
 	s = strings.ReplaceAll(s, `\times`, "×")
 	s = strings.ReplaceAll(s, `\ge`, "≥")
 	s = strings.ReplaceAll(s, `\le`, "≤")
 	s = strings.ReplaceAll(s, `\neq`, "≠")
+	s = strings.ReplaceAll(s, `\textordmasculine`, "º")
+	s = strings.ReplaceAll(s, `\textordfeminine`, "ª")
+	s = strings.ReplaceAll(s, `\allowbreak`, "")
+	s = strings.ReplaceAll(s, `~`, " ")
 	s = strings.ReplaceAll(s, `$`, "")
 
-	// Remove \textbf{...} e \textit{...} preservando conteúdo interno
+	// Remove \textbf{...}, \textit{...}, \texttt{...}, \path{...}, \url{...} preservando conteúdo interno
 	boldRegex := regexp.MustCompile(`\\textbf\{([^}]+)\}`)
 	s = boldRegex.ReplaceAllString(s, "$1")
 	italicRegex := regexp.MustCompile(`\\textit\{([^}]+)\}`)
 	s = italicRegex.ReplaceAllString(s, "$1")
+	codeRegex := regexp.MustCompile(`\\(?:texttt|path|url)\{([^}]+)\}`)
+	s = codeRegex.ReplaceAllString(s, "$1")
+	refRegex := regexp.MustCompile(`\\(?:ref|pageref)\{([^}]+)\}`)
+	s = refRegex.ReplaceAllString(s, "$1")
 
 	// Colapso de múltiplos espaços
 	s = strings.Join(strings.Fields(s), " ")

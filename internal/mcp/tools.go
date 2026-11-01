@@ -51,6 +51,9 @@ func RegisterTools(s *server.MCPServer) {
 	// (normalize_doc_structure foi unificada e absorvida definitivamente por format_document_abnt)
 	registerSyncSectionToDoc(s)
 	registerResetDocToTemplate(s)
+
+	// Inspeção Estrutural de Baixo Nível (Geometria, Recuos, Fontes, Quebras e Tabelas)
+	registerInspectDocLayout(s)
 }
 
 // ─── Tool X: get_doc_skeleton ───────────────────────────────────────────────
@@ -1277,5 +1280,61 @@ func handleResetDocToTemplate(ctx context.Context, request mcplib.CallToolReques
 	}
 
 	return mcplib.NewToolResultText(msg), nil
+}
+
+// ─── Tool 26: inspect_doc_layout ──────────────────────────────────────────
+
+func registerInspectDocLayout(s *server.MCPServer) {
+	tool := mcplib.NewTool("inspect_doc_layout",
+		mcplib.WithDescription(
+			"Inspeciona a geometria e as propriedades estruturais de baixo nível dos elementos do Google Docs: "+
+				"recuos exatos em pontos (IndentStart e IndentFirstLine), alinhamento, espaçamento (SpaceAbove, SpaceBelow), "+
+				"fontes, quebras de página (PageBreak), imagens/logos (InlineObject) e dimensões e preenchimento de tabelas nativas. "+
+				"Ideal para diagnósticos cirúrgicos de layout e ABNT sem opacidade de markdown."),
+		mcplib.WithString("document_url_or_id",
+			mcplib.Required(),
+			mcplib.Description("URL completa do Google Docs ou ID do documento"),
+		),
+		mcplib.WithInteger("start_index",
+			mcplib.Description("Índice de início em caracteres para filtrar os elementos (opcional, padrão: 0)"),
+		),
+		mcplib.WithInteger("end_index",
+			mcplib.Description("Índice de fim em caracteres para filtrar os elementos (opcional, padrão: 0 para ler até o fim)"),
+		),
+		mcplib.WithInteger("limit",
+			mcplib.Description("Número máximo de elementos a inspecionar (opcional, padrão: 50, use 0 para sem limite)"),
+		),
+	)
+	s.AddTool(tool, handleInspectDocLayout)
+	log.Println("[INFO] Ferramenta registrada: inspect_doc_layout (inspeção estrutural de baixo nível)")
+}
+
+func handleInspectDocLayout(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	input, err := request.RequireString("document_url_or_id")
+	if err != nil {
+		return mcplib.NewToolResultError("Parâmetro 'document_url_or_id' é obrigatório."), nil
+	}
+
+	docID, err := gdocs.ExtractAndValidateDocID(ctx, input)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	}
+
+	startIndex := int64(request.GetInt("start_index", 0))
+	endIndex := int64(request.GetInt("end_index", 0))
+	limit := request.GetInt("limit", 50)
+
+	report, err := gdocs.InspectDocLayout(ctx, docID, startIndex, endIndex, limit)
+	if err != nil {
+		log.Printf("[ERRO] inspect_doc_layout: %v", err)
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO: %v", err)), nil
+	}
+
+	outJSON, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("ERRO ao serializar relatório: %v", err)), nil
+	}
+
+	return mcplib.NewToolResultText(string(outJSON)), nil
 }
 

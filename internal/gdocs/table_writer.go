@@ -50,7 +50,12 @@ func InsertNativeTable(ctx context.Context, documentID string, targetIndex int64
 
 	captionText := ""
 	if strings.TrimSpace(tableData.Caption) != "" {
-		captionText = fmt.Sprintf("Tabela – %s\n", strings.TrimSpace(tableData.Caption))
+		trimmedCap := strings.TrimSpace(tableData.Caption)
+		if strings.HasPrefix(trimmedCap, "Tabela ") || strings.HasPrefix(trimmedCap, "Quadro ") || strings.HasPrefix(trimmedCap, "Tabela –") || strings.HasPrefix(trimmedCap, "Quadro –") {
+			captionText = fmt.Sprintf("%s\n", trimmedCap)
+		} else {
+			captionText = fmt.Sprintf("Tabela – %s\n", trimmedCap)
+		}
 		step1Requests = append(step1Requests, &docs.Request{
 			InsertText: &docs.InsertTextRequest{
 				Location: &docs.Location{Index: currentOffset},
@@ -175,7 +180,12 @@ func InsertNativeTable(ctx context.Context, documentID string, targetIndex int64
 
 	// 3.2 Fonte no maior índice (tableEndIndex)
 	if strings.TrimSpace(tableData.Source) != "" {
-		sourceText := fmt.Sprintf("\nFonte: %s\n", strings.TrimSpace(tableData.Source))
+		trimmedSrc := strings.TrimSpace(tableData.Source)
+		upperSrc := strings.ToUpper(trimmedSrc)
+		if !strings.HasPrefix(upperSrc, "FONTE:") && !strings.HasPrefix(upperSrc, "FONTE ") {
+			trimmedSrc = fmt.Sprintf("Fonte: %s", trimmedSrc)
+		}
+		sourceText := fmt.Sprintf("\n%s\n", trimmedSrc)
 		sourceLen := UTF16Length(sourceText)
 
 		step3Requests = append(step3Requests, &docs.Request{

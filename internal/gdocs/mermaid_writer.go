@@ -87,8 +87,22 @@ func InsertMermaidDiagram(ctx context.Context, documentID string, targetIndex in
 	if mmdCode != "" {
 		pakoURL, err := BuildMermaidPakoURL(mmdCode)
 		if err == nil && len(pakoURL) <= 2040 {
-			log.Printf("[INFO] Inserindo imagem inline via Mermaid Pako URL (%d bytes)", len(pakoURL))
-			return insertInlineImageDirect(ctx, documentID, targetIndex, pakoURL, 450.0, 320.0, caption, source)
+			targetWidthPt := 450.0
+			targetHeightPt := 320.0
+			// Se o arquivo PNG original existe, preserva o aspect ratio exato
+			if len(trimmed) > 0 {
+				if pngBytes, errRead := os.ReadFile(trimmed); errRead == nil {
+					if cfg, _, errCfg := image.DecodeConfig(bytes.NewReader(pngBytes)); errCfg == nil && cfg.Width > 0 && cfg.Height > 0 {
+						wPt := float64(cfg.Width)
+						hPt := float64(cfg.Height)
+						scale := math.Min(1.0, math.Min(450.0/wPt, 620.0/hPt))
+						targetWidthPt = wPt * scale
+						targetHeightPt = hPt * scale
+					}
+				}
+			}
+			log.Printf("[INFO] Inserindo imagem inline via Mermaid Pako URL (%d bytes, dimensões: %.1fx%.1f pt)", len(pakoURL), targetWidthPt, targetHeightPt)
+			return insertInlineImageDirect(ctx, documentID, targetIndex, pakoURL, targetWidthPt, targetHeightPt, caption, source)
 		}
 	}
 
@@ -112,8 +126,13 @@ func insertInlineImageDirect(ctx context.Context, documentID string, targetIndex
 	currentOffset := targetIndex
 
 	// 1. Legenda no Topo
-	if strings.TrimSpace(caption) != "" {
-		capText := fmt.Sprintf("Figura – %s\n", strings.TrimSpace(caption))
+	captionText := strings.TrimSpace(caption)
+	if captionText != "" {
+		upperCap := strings.ToUpper(captionText)
+		if !strings.HasPrefix(upperCap, "FIGURA ") && !strings.HasPrefix(upperCap, "FIGURA –") && !strings.HasPrefix(upperCap, "FIGURA -") && !strings.HasPrefix(upperCap, "GRÁFICO") {
+			captionText = fmt.Sprintf("Figura – %s", captionText)
+		}
+		capText := fmt.Sprintf("%s\n", captionText)
 		capLen := UTF16Length(capText)
 		requests = append(requests, &docs.Request{
 			InsertText: &docs.InsertTextRequest{
@@ -157,16 +176,34 @@ func insertInlineImageDirect(ctx context.Context, documentID string, targetIndex
 			},
 		},
 	})
+	requests = append(requests, &docs.Request{
+		UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+			Range: &docs.Range{
+				StartIndex: currentOffset,
+				EndIndex:   currentOffset + 1,
+			},
+			ParagraphStyle: &docs.ParagraphStyle{
+				Alignment:      "CENTER",
+				NamedStyleType: "NORMAL_TEXT",
+			},
+			Fields: "alignment,namedStyleType",
+		},
+	})
 	currentOffset += 1
 
 	// 3. Fonte no Rodapé
-	if strings.TrimSpace(source) != "" {
-		sourceText := fmt.Sprintf("\nFonte: %s\n\n", strings.TrimSpace(source))
-		sourceLen := UTF16Length(sourceText)
+	sourceText := strings.TrimSpace(source)
+	if sourceText != "" {
+		upperSrc := strings.ToUpper(sourceText)
+		if !strings.HasPrefix(upperSrc, "FONTE:") && !strings.HasPrefix(upperSrc, "FONTE ") {
+			sourceText = fmt.Sprintf("Fonte: %s", sourceText)
+		}
+		sourceFinal := fmt.Sprintf("\n%s\n\n", sourceText)
+		sourceLen := UTF16Length(sourceFinal)
 		requests = append(requests, &docs.Request{
 			InsertText: &docs.InsertTextRequest{
 				Location: &docs.Location{Index: currentOffset},
-				Text:     sourceText,
+				Text:     sourceFinal,
 			},
 		})
 		requests = append(requests, &docs.Request{
@@ -251,8 +288,22 @@ func InsertMermaidDiagramBytes(ctx context.Context, documentID string, targetInd
 		if errDocSvc != nil {
 			return nil, errDocSvc
 		}
-		fallbackText := fmt.Sprintf("\nFigura – %s\n[Diagrama renderizado no PDF compilado: %s]\nFonte: %s\n\n",
-			strings.TrimSpace(caption), filename, strings.TrimSpace(source))
+		fallbackCap := strings.TrimSpace(caption)
+		if fallbackCap != "" {
+			upperCap := strings.ToUpper(fallbackCap)
+			if !strings.HasPrefix(upperCap, "FIGURA ") && !strings.HasPrefix(upperCap, "FIGURA –") && !strings.HasPrefix(upperCap, "FIGURA -") && !strings.HasPrefix(upperCap, "GRÁFICO") {
+				fallbackCap = fmt.Sprintf("Figura – %s", fallbackCap)
+			}
+		}
+		fallbackSrc := strings.TrimSpace(source)
+		if fallbackSrc != "" {
+			upperSrc := strings.ToUpper(fallbackSrc)
+			if !strings.HasPrefix(upperSrc, "FONTE:") && !strings.HasPrefix(upperSrc, "FONTE ") {
+				fallbackSrc = fmt.Sprintf("Fonte: %s", fallbackSrc)
+			}
+		}
+		fallbackText := fmt.Sprintf("\n%s\n[Diagrama renderizado no PDF compilado: %s]\n%s\n\n",
+			fallbackCap, filename, fallbackSrc)
 		req := &docs.BatchUpdateDocumentRequest{
 			Requests: []*docs.Request{
 				{

@@ -226,8 +226,10 @@ func SyncSectionToDoc(ctx context.Context, documentID, targetSectionTitle, secti
 	// Tenta localizar a seção existente para atualizar
 	foundStart := int64(-1)
 	foundEnd := int64(-1)
+	matchIdx := -1
+	targetLevel := 1
 
-	for _, el := range doc.Body.Content {
+	for i, el := range doc.Body.Content {
 		if el.Paragraph != nil {
 			pText := ""
 			for _, pEl := range el.Paragraph.Elements {
@@ -239,20 +241,102 @@ func SyncSectionToDoc(ctx context.Context, documentID, targetSectionTitle, secti
 
 			if strings.Contains(trimmed, cleanTarget) {
 				foundStart = el.StartIndex
-				foundEnd = el.EndIndex
+				matchIdx = i
+				if el.Paragraph.ParagraphStyle != nil {
+					switch el.Paragraph.ParagraphStyle.NamedStyleType {
+					case "HEADING_1":
+						targetLevel = 1
+					case "HEADING_2":
+						targetLevel = 2
+					case "HEADING_3":
+						targetLevel = 3
+					default:
+						if regexPrimaryHeading.MatchString(pText) {
+							targetLevel = 1
+						} else if regexSecondaryHeading.MatchString(pText) {
+							targetLevel = 2
+						} else if regexTertiaryHeading.MatchString(pText) {
+							targetLevel = 3
+						}
+					}
+				}
 				break
 			}
 		}
 	}
 
 	if foundStart != -1 {
+		// Encontra onde a seção termina: início do próximo título de nível igual ou superior
+		bodyEnd := doc.Body.Content[len(doc.Body.Content)-1].EndIndex - 1
+		foundEnd = bodyEnd
+		for j := matchIdx + 1; j < len(doc.Body.Content); j++ {
+			nextEl := doc.Body.Content[j]
+			if nextEl.Paragraph != nil {
+				lvl := 0
+				if nextEl.Paragraph.ParagraphStyle != nil {
+					switch nextEl.Paragraph.ParagraphStyle.NamedStyleType {
+					case "HEADING_1":
+						lvl = 1
+					case "HEADING_2":
+						lvl = 2
+					case "HEADING_3":
+						lvl = 3
+					}
+				}
+				txt := ""
+				for _, pEl := range nextEl.Paragraph.Elements {
+					if pEl.TextRun != nil {
+						txt += pEl.TextRun.Content
+					}
+				}
+				trimTxt := strings.TrimSpace(txt)
+				if lvl == 0 {
+					if regexPrimaryHeading.MatchString(trimTxt) {
+						lvl = 1
+					} else if regexSecondaryHeading.MatchString(trimTxt) {
+						lvl = 2
+					} else if regexTertiaryHeading.MatchString(trimTxt) {
+						lvl = 3
+					}
+				}
+				if lvl > 0 && lvl <= targetLevel {
+					foundEnd = nextEl.StartIndex
+					break
+				}
+			}
+		}
+
 		// Substituição controlada in-place do bloco da seção
-		return ReplaceBlockABNT(ctx, documentID, foundStart, foundEnd, sectionContent)
+		res, err := ReplaceBlockABNT(ctx, documentID, foundStart, foundEnd, sectionContent)
+		if err != nil {
+			return "", err
+		}
+		_, _ = FormatDocumentABNT(ctx, documentID, 0, 0, false, true)
+		return res, nil
 	}
 
-	// Se não encontrada, anexa antes do final do documento
+	// Se não encontrada, anexa antes das Referências (se existirem) ou no final do documento
 	if len(doc.Body.Content) > 0 {
 		targetIndex = doc.Body.Content[len(doc.Body.Content)-1].EndIndex - 1
+	}
+	refIndex := int64(-1)
+	for _, el := range doc.Body.Content {
+		if el.Paragraph != nil {
+			txt := ""
+			for _, pEl := range el.Paragraph.Elements {
+				if pEl.TextRun != nil {
+					txt += pEl.TextRun.Content
+				}
+			}
+			t := strings.ToUpper(strings.TrimSpace(txt))
+			if strings.Contains(t, "REFERÊNCIAS") || strings.Contains(t, "REFERENCIAS") {
+				refIndex = el.StartIndex
+				break
+			}
+		}
+	}
+	if refIndex > 0 && !strings.Contains(cleanTarget, "referência") && !strings.Contains(cleanTarget, "referencia") && !strings.Contains(cleanTarget, "apêndice") && !strings.Contains(cleanTarget, "anexo") {
+		targetIndex = refIndex
 	}
 
 	insertText := fmt.Sprintf("\n\n%s\n\n%s\n", strings.ToUpper(targetSectionTitle), sectionContent)
@@ -271,6 +355,7 @@ func SyncSectionToDoc(ctx context.Context, documentID, targetSectionTitle, secti
 		return "", fmt.Errorf("erro ao anexar seção: %w", errIns)
 	}
 
+	_, _ = FormatDocumentABNT(ctx, documentID, 0, 0, false, true)
 	return fmt.Sprintf("SUCESSO: Seção '%s' anexada ao documento no índice %d.", targetSectionTitle, targetIndex), nil
 }
 

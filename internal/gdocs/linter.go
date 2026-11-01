@@ -675,7 +675,27 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 					consecutiveBullets = 0
 				}
 
-				if !isCaptionOrSource && !isBullet && !isPreTextualNote(trimmed) && trimmed != "" {
+				isHeadingItem := isHeading ||
+					rePrimaryHeadingNum.MatchString(trimmed) ||
+					rePrimaryHeadingNoNum.MatchString(trimmed) ||
+					reSecondaryHeading.MatchString(trimmed) ||
+					reTertiaryHeading.MatchString(trimmed) ||
+					reQuaternaryHeading.MatchString(trimmed)
+
+				isAlineaOrListItem := regexp.MustCompile(`^[a-z]\)\s+`).MatchString(trimmed) ||
+					regexp.MustCompile(`^[0-9]+[\.\)]\s+`).MatchString(trimmed) ||
+					regexp.MustCompile(`^(?:RF|RN|RNF|RE|C)[0-9\-]+:`).MatchString(trimmed) ||
+					strings.HasSuffix(trimmed, ";")
+
+				isFormulaOrMath := strings.HasPrefix(trimmed, "H₀:") || strings.HasPrefix(trimmed, "H₁:") ||
+					strings.HasPrefix(trimmed, "H0:") || strings.HasPrefix(trimmed, "H1:") ||
+					strings.HasPrefix(trimmed, "TCD_") || strings.Contains(trimmed, " = ") ||
+					strings.Contains(trimmed, " > ") || strings.Contains(trimmed, " < ")
+
+				isListOrTableIntro := strings.HasSuffix(trimmed, ":") ||
+					strings.HasPrefix(trimmed, "A Tabela ") || strings.HasPrefix(trimmed, "O Quadro ") || strings.HasPrefix(trimmed, "A Figura ")
+
+				if !isCaptionOrSource && !isBullet && !isPreTextualNote(trimmed) && !isHeadingItem && !isAlineaOrListItem && !isFormulaOrMath && !isListOrTableIntro && trimmed != "" {
 					runeLen := utf8.RuneCountInString(trimmed)
 					isSubheadingOrStage := strings.HasPrefix(trimmed, "Etapa de ") || strings.HasPrefix(trimmed, "Fase de ")
 					if runeLen < 100 && !strings.Contains(trimmed, "[TABELA]") && !isSubheadingOrStage {
@@ -1128,6 +1148,10 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " ."}, ReplaceText: "."}},
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " ;"}, ReplaceText: ";"}},
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " :"}, ReplaceText: ":"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "))"}, ReplaceText: ")"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "(("}, ReplaceText: "("}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "( "}, ReplaceText: "("}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: " )"}, ReplaceText: ")"}},
 			)
 		}
 
@@ -1138,6 +1162,9 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\times"}, ReplaceText: "×"}},
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\ge"}, ReplaceText: "≥"}},
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\le"}, ReplaceText: "≤"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\textordmasculine"}, ReplaceText: "º"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\textordfeminine"}, ReplaceText: "ª"}},
+				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\allowbreak"}, ReplaceText: ""}},
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "~"}, ReplaceText: " "}},
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "[TABELA]"}, ReplaceText: ""}},
 				&docs.Request{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "[/TABELA]"}, ReplaceText: ""}},

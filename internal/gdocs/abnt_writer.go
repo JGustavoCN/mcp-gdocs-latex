@@ -16,9 +16,9 @@ import (
 var (
 	rePrimaryHeadingNum   = regexp.MustCompile(`^(?:[1-9][0-9]*\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇ\s\-]{3,}|CAPÍTULO\s+[0-9]+.*)$`)
 	rePrimaryHeadingNoNum = regexp.MustCompile(`^(?:RESUMO|ABSTRACT|REFERÊNCIAS|SUMÁRIO|LISTA DE ILUSTRAÇÕES|LISTA DE TABELAS|LISTA DE ABREVIATURAS E SIGLAS|ANEXO[S]?.*|APÊNDICE[S]?.*)$`)
-	reSecondaryHeading    = regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇa-záéíóúâêîôûãõç\s\-,/]+$`)
-	reTertiaryHeading     = regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+\.[0-9]+\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇa-záéíóúâêîôûãõç\s\-,/]+$`)
-	reQuaternaryHeading   = regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+\.[0-9]+\.[0-9]+\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇa-záéíóúâêîôûãõç\s\-,/]+$`)
+	reSecondaryHeading    = regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+\s+[\p{L}\p{N}\s,/():;'"–—×+\-]+$`)
+	reTertiaryHeading     = regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+\.[0-9]+\s+[\p{L}\p{N}\s,/():;'"–—×+\-]+$`)
+	reQuaternaryHeading   = regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+\.[0-9]+\.[0-9]+\s+[\p{L}\p{N}\s,/():;'"–—×+\-]+$`)
 	rePureLatexCmd        = regexp.MustCompile(`(?i)^\s*\\(?:chapter|section|subsection|subsubsection|label|begin|end|ref|cite|caption|centering|hline|toprule|midrule|bottomrule)\*?(?:[{(][^})]*[})]?|\[[^\]]*\]|\{[^}]*\})*\s*$`)
 	reLatexLeakInline     = regexp.MustCompile(`(?i)\\(?:chapter|section|subsection|subsubsection|label|begin|end|ref|cite|caption|textit|textbf|path)\*?[{(]([^})]*)[})]?`)
 )
@@ -782,11 +782,11 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			}
 
 			// Identificação hierárquica segundo NBR 6024 e ABNT 2026
-			isHeading1Num := rePrimaryHeadingNum.MatchString(trimmed) || (currentStyle == "HEADING_1" && !rePrimaryHeadingNoNum.MatchString(trimmed))
+			isHeading1Num := rePrimaryHeadingNum.MatchString(trimmed) || (currentStyle == "HEADING_1" && !rePrimaryHeadingNoNum.MatchString(trimmed) && len(trimmed) < 120)
 			isHeading1NoNum := rePrimaryHeadingNoNum.MatchString(trimmed) || trimmed == "3 REFERÊNCIAS"
-			isHeading2 := reSecondaryHeading.MatchString(trimmed) || currentStyle == "HEADING_2"
-			isHeading3 := reTertiaryHeading.MatchString(trimmed) || currentStyle == "HEADING_3"
-			isHeading4 := reQuaternaryHeading.MatchString(trimmed) || currentStyle == "HEADING_4"
+			isHeading2 := reSecondaryHeading.MatchString(trimmed) || (currentStyle == "HEADING_2" && len(trimmed) < 120)
+			isHeading3 := reTertiaryHeading.MatchString(trimmed) || (currentStyle == "HEADING_3" && len(trimmed) < 120)
+			isHeading4 := reQuaternaryHeading.MatchString(trimmed) || (currentStyle == "HEADING_4" && len(trimmed) < 120)
 
 			// Enriquecimento semântico: se o parágrafo for curto e coincidir com seção do TCC
 			if !isHeading1Num && !isHeading1NoNum && !isHeading2 && !isHeading3 && !isHeading4 && len(trimmed) < 120 {
