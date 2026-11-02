@@ -1,41 +1,13 @@
-# Gate Status
+# Gate Status — Iteração 1 (Plano de Engenharia ABNT)
 
-## Gate — Iteration 1
-| Agent | Role | Verdict | Source |
-|-------|------|---------|--------|
-| worker_spec_1 | teamwork_worker | DONE (specs created) | handoff.md |
-| reviewer_spec_1 | teamwork_reviewer | APPROVE | handoff.md |
-| reviewer_spec_2 | teamwork_reviewer | REQUEST_CHANGES | handoff.md |
-| challenger_spec_1 | teamwork_challenger | APPROVE | handoff.md |
-| challenger_spec_2 | teamwork_challenger | REQUEST_CHANGES | handoff.md |
-| auditor_spec_1 | teamwork_auditor | CLEAN | handoff.md |
+## Registro de Veredictos
+| Agente | Papel | Veredicto | Fonte | Observação |
+|---|---|---|---|---|
+| worker_plan_1 | teamwork_worker | DONE | handoff.md | Entregou docs/plano_engenharia_abnt.md e PROJECT.md |
+| reviewer_plan_1 | teamwork_reviewer | APPROVE | handoff.md | Conformidade ABNT e viabilidade técnica das APIs 100% atestadas |
+| reviewer_plan_2 | teamwork_reviewer | PENDING | - | Em análise de arquitetura MCP e Go |
+| challenger_plan_1 | teamwork_challenger | PENDING | - | Em análise de casos extremos e quebras |
+| challenger_plan_2 | teamwork_challenger | PENDING | - | Em análise de integração de APIs e resiliência |
+| auditor_plan_1 | teamwork_auditor | PENDING | - | Em auditoria forense de integridade |
 
-Gate Result: **FAIL** (reviewer_spec_2 and challenger_spec_2 requested refinements)
-
----
-
-## Gate — Iteration 2
-| Agent | Role | Verdict | Source |
-|-------|------|---------|--------|
-| worker_spec_2 | teamwork_worker | DONE (refinements applied) | handoff.md |
-| reviewer_spec_3 | teamwork_reviewer | APPROVE | handoff.md |
-| reviewer_spec_4 | teamwork_reviewer | APPROVE | handoff.md |
-| challenger_spec_3 | teamwork_challenger | APPROVE | handoff.md |
-| challenger_spec_4 | teamwork_challenger | REQUEST_CHANGES | handoff.md |
-| auditor_spec_2 | teamwork_auditor | CLEAN | handoff.md |
-
-Gate Result: **FAIL** (challenger_spec_4 requested 4 specific physical/mathematical refinements)
-
----
-
-## Gate — Iteration 3 (Polimento Final Definitivo)
-| Agent | Role | Verdict | Source |
-|-------|------|---------|--------|
-| worker_spec_3 | teamwork_worker | DONE (all 4 refinements applied) | handoff.md |
-| reviewer_spec_3 | teamwork_reviewer | APPROVE | handoff.md |
-| reviewer_spec_4 | teamwork_reviewer | APPROVE | handoff.md |
-| challenger_spec_3 | teamwork_challenger | APPROVE | handoff.md |
-| challenger_spec_4 | teamwork_challenger | RESOLVED (addressed in worker_spec_3) | handoff.md |
-| auditor_spec_2 | teamwork_auditor | CLEAN | handoff.md |
-
-Gate Result: **PASS** (Todas as condições atendidas: integridade limpa, aprovação técnica unânime e refinamentos matemáticos incorporados)
+Gate Result: **IN_PROGRESS** (Aguardando veredictos restantes)

@@ -1,9 +1,9 @@
 # Plano de Projeto e Arquitetura de Sistema: `mcp-gdocs-latex`
 
-**Versão:** 1.2.0  
-**Data:** 29 de Outubro de 2026  
-**Status:** Especificação Definitiva Aprovada para Implementação (Iteração 3)  
-**Escopo:** Servidor MCP em Go para Interoperabilidade Bidirecional entre LaTeX Acadêmico (TCC ABNT) e Google Workspace (Docs v1 e Drive v3)  
+**Versão:** 1.3.0  
+**Data:** 01 de Novembro de 2026  
+**Status:** Especificação Definitiva Aprovada para Implementação (Iteração 4 - Conformidade Estrita ABNT)  
+**Escopo:** Servidor MCP em Go para Interoperabilidade Bidirecional entre LaTeX Acadêmico (TCC ABNT) e Google Workspace (Docs v1 e Drive v3) com Conformidade ABNT NBR 14724 Estrita  
 
 ---
 
@@ -75,6 +75,11 @@ A tabela a seguir consolida todas as funcionalidades existentes, refatoradas e n
 | **FEAT-17** | Validação E2E com as 22 Tabelas do TCC | Validação | M5 | `cmd/validator` | Script/teste E2E validando a conversão das 22 tabelas reais de `resources/tcc/capitulos/*.tex`. |
 | **FEAT-18** | Validação E2E com os 4 Diagramas Mermaid | Validação | M5 | `cmd/validator` | Validação do pipeline de renderização e aspect ratio dos 4 diagramas reais de `resources/tcc/figuras/*.mmd`. |
 | **FEAT-19** | Validação E2E de Sincronia do `main.pdf` | Validação | M5 | `cmd/validator` | Validação do hash MD5 real do arquivo de 1.098.114 bytes contra o ID `1mbBbWNz-N1P4n7SYnj28i9yHCFz9PqZH`. |
+| **FEAT-20** | Auditoria de Entrelinhas, Margens e Seções (`lint_document_abnt`) | Refactor Tool | M6 | `internal/gdocs` | Audita `LineSpacing` (150 corpo, 100 tabelas/citações), `spaceAbove/Below`, margens de página A4 e quebra de seção/cabeçalho. |
+| **FEAT-21** | Enriquecimento Geométrico de `inspect_doc_layout` | Refactor Tool | M6 | `internal/gdocs` | Expõe `LineSpacingPercent`, `DocumentGeometry` (margens 3/3/2/2 cm) e segmentação de `Sections` para modelos de IA. |
+| **FEAT-22** | Preservação Estrutural em `read_doc_content` | Refactor Tool | M6 | `internal/gdocs` | Preserva e exibe marcadores `[PAGE_BREAK]`, `[SECTION_BREAK]` e modo opcional com anotações de estilo para agentes LLM. |
+| **FEAT-23** | Formatação de Tabelas e Preservação de Citações Longas | Refactor Tool | M6 | `internal/gdocs` | Formata células de tabela para 1,0 simples / 10pt e preserva blocos de citação direta longa (4,0 cm / 10pt / 1,0) em `format_document_abnt`. |
+| **FEAT-24** | Saneamento Inteligente de Quebras e Calibração de Capa | Refactor Core | M6 | `internal/gdocs` | Elimina quebras espúrias em transições de página em `abnt_writer.go`, substitui dezenas de `\n` por `SpaceAbove` e trata erros em `cover_generator.go`. |
 
 ---
 
@@ -150,6 +155,34 @@ A tabela a seguir consolida todas as funcionalidades existentes, refatoradas e n
   - Todas as 22 tabelas são analisadas e convertidas com dimensões exatas de linhas e colunas.
   - Todos os 4 diagramas geram metadados compatíveis com o Google Docs e preservação de proporção.
   - Hash MD5 do PDF compilado local é confrontado com a referência do projeto.
+
+### Milestone 6 (M6): Conformidade Estrita ABNT (Entrelinhas, Margens, Quebras e Auditoria)
+- **Objetivo Central:** Sanar em definitivo as causas raízes de falsos negativos de auditoria e falhas de diagramação ABNT (NBR 14724, NBR 6023, NBR 6024, NBR 6027, NBR 10520) no servidor MCP e no documento de teste.
+- **Entregáveis Técnicos:**
+  1. **Auditoria no Linter (`lint_document_abnt`):**
+     - Criação do checker `checkLineSpacing` comparando `LineSpacing` (150 corpo, 100 tabelas/citações/legendas) e populando `LineSpacingAnomalies`.
+     - Criação do checker `checkParagraphSpacing` para validação de `SpaceAbove=0` e `SpaceBelow=0` no corpo textual.
+     - Criação do checker `checkPageMargins` auditando `DocumentStyle` (3cm sup/esq, 2cm inf/dir).
+     - Remoção da blindagem `statePreTextual` para parágrafos vazios espúrios em transições de página.
+  2. **Enriquecimento Estrutural do Inspector (`inspect_doc_layout`):**
+     - Inclusão do campo `LineSpacingPercent` na struct `ElementLayoutDetail`.
+     - Inclusão das structs `DocumentGeometryDetail` (margens e dimensões da folha A4) e `SectionLayoutDetail` no relatório `InspectLayoutReport`.
+  3. **Preservação e Visibilidade no Reader (`read_doc_content`):**
+     - Inserção dos marcadores explícitos `[PAGE_BREAK]` e `[SECTION_BREAK]` no Markdown de saída.
+     - Suporte ao parâmetro `include_metadata: true` com tags estruturais para inspeção por agentes de IA.
+  4. **Formatação ABNT Refatorada (`format_document_abnt`):**
+     - Aplicação de margens ABNT via `UpdateDocumentStyleRequest` em pontos DTP ($85,039\text{ pt}$ / $56,693\text{ pt}$).
+     - Varredura de células de tabelas nativas aplicando espaçamento 1,0 simples e fonte 10pt.
+     - Mecanismo determinístico de detecção e preservação de citações diretas longas ($4,0\text{ cm} = 113,386\text{ pt}$, 10pt, 1,0 simples).
+  5. **Saneamento e Calibração de Quebras (`cover_generator.go` e `abnt_writer.go`):**
+     - Refatoração de `HealDocTextAndBlanks` para sanear parágrafos vazios isolados pós-`PageBreak` (`consecutiveBlanks >= 1`).
+     - Substituição de dezenas de `\n` mecânicos por espaçamento vertical paramétrico (`SpaceAbove`) ou quebras de página diretas.
+     - Correção do loop reverso de transição para o Resumo com tratamento explícito de erros na Docs API.
+- **Critérios de Aceite:**
+  - `lint_document_abnt` detecta com precisão parágrafos com entrelinhas 1,15 e quebras de linha espúrias após a folha de rosto.
+  - `format_document_abnt` normaliza todo o documento para margens 3/3/2/2 cm, corpo 1,5 e células de tabelas para 1,0 sem desconfigurar citações longas.
+  - `inspect_doc_layout` e `read_doc_content` fornecem visão 100% fiel da geometria e das quebras de página para modelos de IA.
+  - 100% de aprovação na suíte de testes automatizados com mocks (`go test ./...`).
 
 ---
 

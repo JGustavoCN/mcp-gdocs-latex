@@ -1,6 +1,7 @@
 package gdocs
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -98,6 +99,49 @@ func TestLinterRegexRules(t *testing.T) {
 	allowbreakSnippet := `O comando \allowbreak não deve vazar no corpo.`
 	if !reLatexCmdInText.MatchString(allowbreakSnippet) {
 		t.Errorf("reLatexCmdInText deveria detectar \\allowbreak em %q", allowbreakSnippet)
+	}
+}
+
+func TestLineSpacingAuditLogic(t *testing.T) {
+	testCases := []struct {
+		trimmed           string
+		isHeading         bool
+		state             docSectionState
+		isLongQuote       bool
+		isCaptionOrSource bool
+		expectedSpacing   float64
+	}{
+		{trimmed: "Texto normal do corpo do trabalho acadêmico", isHeading: false, state: stateTextual, isLongQuote: false, isCaptionOrSource: false, expectedSpacing: 150.0},
+		{trimmed: "REFERÊNCIAS", isHeading: true, state: statePostTextual, isLongQuote: false, isCaptionOrSource: false, expectedSpacing: 150.0},
+		{trimmed: "ANTHROPIC. Model Context Protocol: Specification and Architecture. 2024.", isHeading: false, state: statePostTextual, isLongQuote: false, isCaptionOrSource: false, expectedSpacing: 100.0},
+		{trimmed: "Figura 1 -- Fluxograma do pipeline", isHeading: false, state: stateTextual, isLongQuote: false, isCaptionOrSource: true, expectedSpacing: 100.0},
+		{trimmed: "Fonte: Autor (2026)", isHeading: false, state: stateTextual, isLongQuote: false, isCaptionOrSource: true, expectedSpacing: 100.0},
+		{trimmed: "Citação direta longa com recuo de 4cm...", isHeading: false, state: stateTextual, isLongQuote: true, isCaptionOrSource: false, expectedSpacing: 100.0},
+	}
+
+	for _, tc := range testCases {
+		isHeadingItem := tc.isHeading ||
+			rePrimaryHeadingNum.MatchString(tc.trimmed) ||
+			rePrimaryHeadingNoNum.MatchString(tc.trimmed) ||
+			reSecondaryHeading.MatchString(tc.trimmed) ||
+			reTertiaryHeading.MatchString(tc.trimmed) ||
+			reQuaternaryHeading.MatchString(tc.trimmed) ||
+			tc.trimmed == "REFERÊNCIAS" || strings.HasPrefix(tc.trimmed, "REFERÊNCIAS")
+
+		expectedSpacing := float64(150.0)
+		if tc.isCaptionOrSource {
+			expectedSpacing = 100.0
+		} else if tc.isLongQuote {
+			expectedSpacing = 100.0
+		} else if isHeadingItem {
+			expectedSpacing = 150.0
+		} else if tc.state == statePostTextual {
+			expectedSpacing = 100.0
+		}
+
+		if expectedSpacing != tc.expectedSpacing {
+			t.Errorf("Para %q: esperado %.1f, obteve %.1f", tc.trimmed, tc.expectedSpacing, expectedSpacing)
+		}
 	}
 }
 

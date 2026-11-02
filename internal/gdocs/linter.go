@@ -100,6 +100,36 @@ type BulletListAnomalyItem struct {
 	Suggestion       string `json:"suggestion"`
 }
 
+// LineSpacingAnomalyItem detalha parágrafos com entrelinhas divergente da regra ABNT (150% ou 100%)
+type LineSpacingAnomalyItem struct {
+	StartIndex      int64   `json:"start_index"`
+	EndIndex        int64   `json:"end_index"`
+	CurrentSpacing  float64 `json:"current_spacing_percent"`
+	ExpectedSpacing float64 `json:"expected_spacing_percent"`
+	ContextType     string  `json:"context_type"`
+	Snippet         string  `json:"snippet"`
+}
+
+// ParagraphSpacingAnomalyItem detalha espaçamentos verticais anômalos (spaceAbove ou spaceBelow > 0 no corpo)
+type ParagraphSpacingAnomalyItem struct {
+	StartIndex int64   `json:"start_index"`
+	EndIndex   int64   `json:"end_index"`
+	SpaceAbove float64 `json:"space_above_pt"`
+	SpaceBelow float64 `json:"space_below_pt"`
+	Snippet    string  `json:"snippet"`
+	Suggestion string  `json:"suggestion"`
+}
+
+// MarginsConformityItem detalha a conformidade das margens da página com a ABNT NBR 14724
+type MarginsConformityItem struct {
+	TopCm     float64 `json:"top_cm"`
+	BottomCm  float64 `json:"bottom_cm"`
+	LeftCm    float64 `json:"left_cm"`
+	RightCm   float64 `json:"right_cm"`
+	IsConform bool    `json:"is_conform"`
+	Details   string  `json:"details,omitempty"`
+}
+
 // LintReport contém os resultados da análise estrutural, tipográfica e de revisões do Google Doc
 type LintReport struct {
 	TotalElements             int                      `json:"total_elements"`
@@ -116,9 +146,12 @@ type LintReport struct {
 	CoverStatus               string                   `json:"cover_status,omitempty"`
 	LatexSyntaxLeaks          []LatexLeakItem          `json:"latex_syntax_leaks,omitempty"`
 	DoubleSpacingAnomalies    []DoubleSpaceAnomalyItem `json:"double_spacing_anomalies,omitempty"`
-	ParagraphQualityAnomalies []ParagraphQualityItem   `json:"paragraph_quality_anomalies,omitempty"`
-	BulletListAnomalies       []BulletListAnomalyItem  `json:"bullet_list_anomalies,omitempty"`
-	ConsecutiveBlankLines     []string                 `json:"consecutive_blank_lines,omitempty"`
+	ParagraphQualityAnomalies []ParagraphQualityItem        `json:"paragraph_quality_anomalies,omitempty"`
+	BulletListAnomalies       []BulletListAnomalyItem       `json:"bullet_list_anomalies,omitempty"`
+	LineSpacingAnomalies      []LineSpacingAnomalyItem      `json:"line_spacing_anomalies,omitempty"`
+	ParagraphSpacingAnomalies []ParagraphSpacingAnomalyItem `json:"paragraph_spacing_anomalies,omitempty"`
+	MarginsConformity         *MarginsConformityItem        `json:"margins_conformity,omitempty"`
+	ConsecutiveBlankLines     []string                      `json:"consecutive_blank_lines,omitempty"`
 	SoftLineBreaks            []string                 `json:"soft_line_breaks,omitempty"`
 	DanglingMarkers           []string                 `json:"dangling_markers,omitempty"`
 	FixedAnomaliesCount       int                      `json:"fixed_anomalies_count,omitempty"`
@@ -142,6 +175,15 @@ var (
 	reSpaceBeforePunct  = regexp.MustCompile(`\s+([,;.:!?])`)
 	reBrokenParenthesis = regexp.MustCompile(`\)\s*\)|\(\s*\)`)
 	reChapterNumber     = regexp.MustCompile(`^([1-9][0-9]*)\s+`)
+)
+
+// DocSectionState rastreia o estado da ordem canônica ABNT NBR 14724
+type docSectionState int
+
+const (
+	statePreTextual docSectionState = iota
+	stateTextual
+	statePostTextual
 )
 
 // classifyColor mapeia valores RGB (0.0 a 1.0) para categoria semântica e código HEX
@@ -230,6 +272,61 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 		TotalElements: len(doc.Body.Content),
 	}
 
+	// 0. Auditoria de Geometria e Margens de Página ABNT NBR 14724
+	if doc.DocumentStyle != nil {
+		topCm := float64(0)
+		bottomCm := float64(0)
+		leftCm := float64(0)
+		rightCm := float64(0)
+		if doc.DocumentStyle.MarginTop != nil {
+			topCm = doc.DocumentStyle.MarginTop.Magnitude / 28.3465
+		}
+		if doc.DocumentStyle.MarginBottom != nil {
+			bottomCm = doc.DocumentStyle.MarginBottom.Magnitude / 28.3465
+		}
+		if doc.DocumentStyle.MarginLeft != nil {
+			leftCm = doc.DocumentStyle.MarginLeft.Magnitude / 28.3465
+		}
+		if doc.DocumentStyle.MarginRight != nil {
+			rightCm = doc.DocumentStyle.MarginRight.Magnitude / 28.3465
+		}
+
+		diffTop := topCm - 3.0
+		if diffTop < 0 {
+			diffTop = -diffTop
+		}
+		diffLeft := leftCm - 3.0
+		if diffLeft < 0 {
+			diffLeft = -diffLeft
+		}
+		diffBottom := bottomCm - 2.0
+		if diffBottom < 0 {
+			diffBottom = -diffBottom
+		}
+		diffRight := rightCm - 2.0
+		if diffRight < 0 {
+			diffRight = -diffRight
+		}
+
+		tol := 0.15 // tolerância em cm (~4 pt)
+		isConform := diffTop <= tol && diffLeft <= tol && diffBottom <= tol && diffRight <= tol
+
+		var details string
+		if !isConform {
+			details = fmt.Sprintf("Margens fora do padrão ABNT (Sup: %.1fcm/esp 3.0cm, Esq: %.1fcm/esp 3.0cm, Inf: %.1fcm/esp 2.0cm, Dir: %.1fcm/esp 2.0cm)",
+				topCm, leftCm, bottomCm, rightCm)
+		}
+
+		report.MarginsConformity = &MarginsConformityItem{
+			TopCm:     topCm,
+			BottomCm:  bottomCm,
+			LeftCm:    leftCm,
+			RightCm:   rightCm,
+			IsConform: isConform,
+			Details:   details,
+		}
+	}
+
 	commentsSummary := getDocCommentsSummary(ctx, documentID)
 
 	type RangeItem struct {
@@ -245,12 +342,6 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 	consecutiveBullets := 0
 
 	// Máquina de estados para rastreamento da ordem canônica ABNT NBR 14724
-	type docSectionState int
-	const (
-		statePreTextual docSectionState = iota
-		stateTextual
-		statePostTextual
-	)
 	currentState := statePreTextual
 	highestChapterNum := 0
 	firstChapterIndex := -1
@@ -275,9 +366,37 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 					cellText := ""
 					for _, cEl := range c.Content {
 						if cEl.Paragraph != nil {
+							pSpacing := float64(100.0)
+							if cEl.Paragraph.ParagraphStyle != nil && cEl.Paragraph.ParagraphStyle.LineSpacing > 0 {
+								pSpacing = cEl.Paragraph.ParagraphStyle.LineSpacing
+							}
+							pCellTxt := ""
 							for _, pEl := range cEl.Paragraph.Elements {
 								if pEl.TextRun != nil {
-									cellText += pEl.TextRun.Content
+									pCellTxt += pEl.TextRun.Content
+								}
+							}
+							trimmedCellPara := strings.TrimSpace(pCellTxt)
+							if trimmedCellPara != "" {
+								cellText += pCellTxt
+								// Auditoria de entrelinhas em células de tabelas (ABNT / IBGE exige espaçamento simples = 100%)
+								diffSpacing := pSpacing - 100.0
+								if diffSpacing < 0 {
+									diffSpacing = -diffSpacing
+								}
+								if diffSpacing > 5.0 {
+									snip := trimmedCellPara
+									if len(snip) > 60 {
+										snip = snip[:60] + "..."
+									}
+									report.LineSpacingAnomalies = append(report.LineSpacingAnomalies, LineSpacingAnomalyItem{
+										StartIndex:      cEl.StartIndex,
+										EndIndex:        cEl.EndIndex,
+										CurrentSpacing:  pSpacing,
+										ExpectedSpacing: 100.0,
+										ContextType:     "Célula de Tabela (ABNT/IBGE: espaçamento simples)",
+										Snippet:         snip,
+									})
 								}
 							}
 						}
@@ -721,6 +840,98 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 							Length:       runeLen,
 							Snippet:      snippet,
 							Suggestion:   "Recomenda-se dividir parágrafos com mais de 1500 caracteres para favorecer a clareza e fluidez da leitura acadêmica.",
+						})
+					}
+				}
+			}
+
+			// 2.8.5 Auditoria de Entrelinhas (LineSpacing) e Espaçamento Vertical (SpaceAbove / SpaceBelow)
+			if opts.CheckSpacingAndText && trimmed != "" && currentState != statePreTextual {
+				pSpacing := float64(100.0)
+				pSpaceAbove := float64(0)
+				pSpaceBelow := float64(0)
+				pIndentStart := float64(0)
+				if p.ParagraphStyle != nil {
+					if p.ParagraphStyle.LineSpacing > 0 {
+						pSpacing = p.ParagraphStyle.LineSpacing
+					}
+					if p.ParagraphStyle.SpaceAbove != nil {
+						pSpaceAbove = p.ParagraphStyle.SpaceAbove.Magnitude
+					}
+					if p.ParagraphStyle.SpaceBelow != nil {
+						pSpaceBelow = p.ParagraphStyle.SpaceBelow.Magnitude
+					}
+					if p.ParagraphStyle.IndentStart != nil {
+						pIndentStart = p.ParagraphStyle.IndentStart.Magnitude
+					}
+				}
+
+				isCaptionOrSource := strings.HasPrefix(trimmed, "Figura ") ||
+					strings.HasPrefix(trimmed, "Tabela ") ||
+					strings.HasPrefix(trimmed, "Quadro ") ||
+					strings.HasPrefix(trimmed, "Fonte:") ||
+					strings.HasPrefix(trimmed, "Nota:")
+
+				isLongQuote := pIndentStart >= 85.0 && !isHeading && !isCaptionOrSource && !isPreTextualNote(trimmed)
+
+				isHeadingItem := isHeading ||
+					rePrimaryHeadingNum.MatchString(trimmed) ||
+					rePrimaryHeadingNoNum.MatchString(trimmed) ||
+					reSecondaryHeading.MatchString(trimmed) ||
+					reTertiaryHeading.MatchString(trimmed) ||
+					reQuaternaryHeading.MatchString(trimmed) ||
+					trimmed == "REFERÊNCIAS" || strings.HasPrefix(trimmed, "REFERÊNCIAS")
+
+				expectedSpacing := float64(150.0)
+				contextType := "Corpo do Texto (ABNT NBR 14724: entrelinhas 1,5)"
+
+				if isCaptionOrSource {
+					expectedSpacing = 100.0
+					contextType = "Legenda / Fonte (ABNT: espaçamento simples)"
+				} else if isLongQuote {
+					expectedSpacing = 100.0
+					contextType = "Citação Direta Longa (ABNT: recuo 4cm e espaçamento simples)"
+				} else if isHeadingItem {
+					expectedSpacing = 150.0
+					contextType = "Título de Seção (ABNT: entrelinhas 1,5)"
+				} else if currentState == statePostTextual {
+					expectedSpacing = 100.0
+					contextType = "Referências Bibliográficas (ABNT NBR 6023: espaçamento simples)"
+				}
+
+				diffSpacing := pSpacing - expectedSpacing
+				if diffSpacing < 0 {
+					diffSpacing = -diffSpacing
+				}
+				if diffSpacing > 5.0 {
+					snip := trimmed
+					if len(snip) > 80 {
+						snip = snip[:80] + "..."
+					}
+					report.LineSpacingAnomalies = append(report.LineSpacingAnomalies, LineSpacingAnomalyItem{
+						StartIndex:      el.StartIndex,
+						EndIndex:        el.EndIndex,
+						CurrentSpacing:  pSpacing,
+						ExpectedSpacing: expectedSpacing,
+						ContextType:     contextType,
+						Snippet:         snip,
+					})
+				}
+
+				// Espaçamento vertical: no corpo do texto contíguo normal, spaceAbove e spaceBelow devem ser 0
+				if currentState == stateTextual && !isHeadingItem && !isCaptionOrSource && !isLongQuote && !isPreTextualNote(trimmed) {
+					if pSpaceAbove > 1.0 || pSpaceBelow > 1.0 {
+						snip := trimmed
+						if len(snip) > 80 {
+							snip = snip[:80] + "..."
+						}
+						report.ParagraphSpacingAnomalies = append(report.ParagraphSpacingAnomalies, ParagraphSpacingAnomalyItem{
+							StartIndex: el.StartIndex,
+							EndIndex:   el.EndIndex,
+							SpaceAbove: pSpaceAbove,
+							SpaceBelow: pSpaceBelow,
+							Snippet:    snip,
+							Suggestion: "ABNT NBR 14724: Parágrafos contíguos do corpo devem ter espaçamento vertical (spaceAbove/spaceBelow) zerado; o distanciamento normativo é assegurado pelo entrelinhas 1,5 e recuo de 1ª linha de 1,25 cm.",
 						})
 					}
 				}
@@ -1247,7 +1458,12 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			len(report.SoftLineBreaks) + len(report.DanglingMarkers) + len(report.ReviewHighlights) +
 			len(report.FontSizeAnomalies) + len(report.FontFamilyAnomalies) + len(report.TextColorAnomalies) +
 			len(report.StructuralOrderViolations) + len(report.MisplacedElements) + len(report.LatexSyntaxLeaks) +
-			len(report.DoubleSpacingAnomalies) + len(report.ParagraphQualityAnomalies) + len(report.BulletListAnomalies)
+			len(report.DoubleSpacingAnomalies) + len(report.ParagraphQualityAnomalies) + len(report.BulletListAnomalies) +
+			len(report.LineSpacingAnomalies) + len(report.ParagraphSpacingAnomalies)
+
+		if report.MarginsConformity != nil && !report.MarginsConformity.IsConform {
+			totalAnomalies++
+		}
 
 		report.Message = fmt.Sprintf("Auditoria concluída. %d anomalias/destaques identificados no documento (autoFix=false).", totalAnomalies)
 	}

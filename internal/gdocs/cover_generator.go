@@ -889,12 +889,20 @@ func EnsurePreTextualPageBreaksAndLayout(ctx context.Context, documentID string)
 			}
 
 			// Detecta transição da Folha de Rosto para o RESUMO
+			hasPageBreak := false
+			for _, pel := range el.Paragraph.Elements {
+				if pel.PageBreak != nil {
+					hasPageBreak = true
+					break
+				}
+			}
+
 			if upperT == "RESUMO" || upperT == "# RESUMO" || strings.HasPrefix(upperT, "RESUMO") {
 				inResumeTransition = true
 				continue
 			}
 			if inResumeTransition {
-				if t == "" {
+				if t == "" && !hasPageBreak {
 					cleanReqs = append(cleanReqs, &docs.Request{
 						DeleteContentRange: &docs.DeleteContentRangeRequest{
 							Range: &docs.Range{StartIndex: el.StartIndex, EndIndex: el.EndIndex},

@@ -341,18 +341,35 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 				t := strings.TrimSpace(txt)
 				if t == "" {
 					consecutiveBlanks++
-					if consecutiveBlanks >= 2 {
-						// Não deleta se for parágrafo obrigatório antes de tabela
-						isBeforeTable := false
-						if i+1 < len(content) && content[i+1].Table != nil {
-							isBeforeTable = true
+					// Checa se o próximo elemento é tabela (não pode deletar parágrafo pré-tabela)
+					isBeforeTable := false
+					if i+1 < len(content) && content[i+1].Table != nil {
+						isBeforeTable = true
+					}
+
+					// Checa se o próximo elemento é um título primário ou início de seção
+					isBeforeHeading := false
+					if i+1 < len(content) && content[i+1].Paragraph != nil {
+						nextTxt := ""
+						for _, npel := range content[i+1].Paragraph.Elements {
+							if npel.TextRun != nil {
+								nextTxt += npel.TextRun.Content
+							}
 						}
-						if !isBeforeTable {
-							toDeleteRanges = append(toDeleteRanges, &docs.Range{
-								StartIndex: el.StartIndex,
-								EndIndex:   el.EndIndex,
-							})
+						nextTrim := strings.TrimSpace(nextTxt)
+						if rePrimaryHeadingNum.MatchString(nextTrim) || rePrimaryHeadingNoNum.MatchString(nextTrim) ||
+							strings.HasPrefix(strings.ToUpper(nextTrim), "RESUMO") ||
+							strings.HasPrefix(strings.ToUpper(nextTrim), "ABSTRACT") {
+							isBeforeHeading = true
 						}
+					}
+
+					// Deleta se houver 2 ou mais vazias consecutivas, ou se for linha vazia imediatamente antes de título
+					if (consecutiveBlanks >= 2 || isBeforeHeading) && !isBeforeTable {
+						toDeleteRanges = append(toDeleteRanges, &docs.Range{
+							StartIndex: el.StartIndex,
+							EndIndex:   el.EndIndex,
+						})
 					}
 				} else {
 					consecutiveBlanks = 0
@@ -696,8 +713,46 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			continue
 		}
 
-		// Tabelas nativas são blindadas: não aplica recuo nas células
+		// Tabelas nativas: formatação ABNT / IBGE das células (espaçamento simples 100%, fonte 10pt, sem recuos)
 		if el.Table != nil {
+			for _, row := range el.Table.TableRows {
+				for _, cell := range row.TableCells {
+					for _, cEl := range cell.Content {
+						if cEl.Paragraph != nil {
+							cRange := &docs.Range{
+								StartIndex: cEl.StartIndex,
+								EndIndex:   cEl.EndIndex,
+							}
+							requests = append(requests, &docs.Request{
+								UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+									Range: cRange,
+									ParagraphStyle: &docs.ParagraphStyle{
+										NamedStyleType:      "NORMAL_TEXT",
+										LineSpacing:         ABNTLineSpacingSingle,
+										IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
+										IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
+										SpaceAbove:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
+										SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
+										AvoidWidowAndOrphan: true,
+									},
+									Fields: "namedStyleType,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
+								},
+							})
+							requests = append(requests, &docs.Request{
+								UpdateTextStyle: &docs.UpdateTextStyleRequest{
+									Range: cRange,
+									TextStyle: &docs.TextStyle{
+										FontSize:           &docs.Dimension{Magnitude: ABNTFontSizeCaptionPt, Unit: "PT"},
+										WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: fontFamily},
+										ForegroundColor:    blackColor,
+									},
+									Fields: "fontSize,weightedFontFamily,foregroundColor",
+								},
+							})
+						}
+					}
+				}
+			}
 			continue
 		}
 
@@ -811,12 +866,21 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 				strings.HasPrefix(trimmed, "Gráfico ")
 			isSource := strings.HasPrefix(trimmed, "Fonte:") || strings.HasPrefix(trimmed, "Nota:")
 
-			// Identificação de citação longa (> 3 linhas ou recuo existente >= 3.5cm)
+			// Identificação de citação longa (> 3 linhas com recuo >= 3.0cm ou fonte reduzida <= 10.5pt)
 			existingIndent := float64(0)
 			if p.ParagraphStyle != nil && p.ParagraphStyle.IndentStart != nil {
 				existingIndent = p.ParagraphStyle.IndentStart.Magnitude
 			}
-			isLongQuote := existingIndent >= 90.0 && !isHeading1Num && !isHeading1NoNum && !isHeading2 && !isPreTextualNote(trimmed)
+			existingFontSize := float64(12.0)
+			for _, pel := range p.Elements {
+				if pel.TextRun != nil && pel.TextRun.TextStyle != nil && pel.TextRun.TextStyle.FontSize != nil {
+					existingFontSize = pel.TextRun.TextStyle.FontSize.Magnitude
+					break
+				}
+			}
+			isLongQuote := (existingIndent >= 85.0 || (existingFontSize <= 10.5 && len(trimmed) > 150)) &&
+				!isHeading1Num && !isHeading1NoNum && !isHeading2 && !isHeading3 && !isHeading4 &&
+				!isCaption && !isSource && !isPreTextualNote(trimmed)
 
 			// ── CASO A: TÍTULO PRIMÁRIO NUMERADO (HEADING_1 - Ex: 1 INTRODUÇÃO, 2 REFERENCIAL TEÓRICO) ──
 			if isHeading1Num {

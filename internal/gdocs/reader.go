@@ -261,7 +261,7 @@ func extractStructuralElements(sb *strings.Builder, elements []*docs.StructuralE
 		case element.Table != nil:
 			processTable(sb, element.Table, startIdx, endIdx)
 		case element.SectionBreak != nil:
-			sb.WriteString("\n---\n")
+			sb.WriteString("\n\n[SECTION_BREAK: NEXT_PAGE]\n\n")
 		}
 	}
 }
@@ -276,6 +276,14 @@ func processParagraph(sb *strings.Builder, paragraph *docs.Paragraph, startIdx, 
 
 	var parts []string
 	for _, elem := range paragraph.Elements {
+		if elem.PageBreak != nil {
+			parts = append(parts, "\n[PAGE_BREAK]\n")
+			continue
+		}
+		if elem.InlineObjectElement != nil {
+			parts = append(parts, "[INLINE_OBJECT]")
+			continue
+		}
 		if elem.TextRun == nil {
 			continue
 		}

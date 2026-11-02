@@ -1,51 +1,48 @@
 # Original User Request
 
-## Initial Request — 2026-10-29T19:01:21Z
+## Initial Request — 2026-11-01T18:15:41Z
 
-Pesquisar as atualizações e documentação recente das APIs do Google Docs e Google Drive e as capacidades de servidores MCP, e elaborar um plano arquitetural detalhado e especificação técnica para o servidor Go `mcp-gdocs-latex`, solucionando os problemas de integridade, formatação ABNT, renderização de tabelas e inserção de diagramas Mermaid entre LaTeX e Google Docs.
+Pesquisa de viabilidade técnica nas APIs do Google Docs e Google Drive e elaboração de plano detalhado de engenharia (/plan) para as ferramentas do MCP mcp-gdocs-latex, visando conformidade estrita com normas ABNT.
 
 Working directory: c:\Projetos\golang\mcp-gdocs-latex
 Integrity mode: development
 
-## Referências
-- `C:\Projetos\golang\mcp-gdocs-latex\resources\outras infromações.md`
-- `C:\Projetos\golang\mcp-gdocs-latex\resources\mcp_sync_history_and_improvements.md`
-- `C:\Projetos\golang\mcp-gdocs-latex\resources\tcc`
-
 ## Requirements
 
-### R1. Pesquisa Técnica e Mapeamento de APIs do Google Docs e Drive
-Pesquisar a documentação oficial, atualizações recentes e capacidades das APIs do Google Docs (v1) e Google Drive (v3), bem como práticas de servidores MCP, identificando os endpoints, payloads em lote (`batchUpdate`) e restrições para manipulação de texto, estilos, tabelas, imagens e metadados.
+### R1. Pesquisa de Viabilidade Técnica na API do Google Docs e Drive
+Investigar as capacidades e restrições da API do Google Docs e do Google Drive para cada uma das normas ABNT do Guia de Referência:
+- Ajuste de margens NBR 14724 (Superior 3cm, Esquerda 3cm, Inferior 2cm, Direita 2cm).
+- Alinhamento justificado e espaçamento entrelinhas (1,5 no corpo com spaceAbove=0/spaceBelow=0; 1,0 em citações longas, notas, referências, legendas e tabelas).
+- Recuo de primeira linha de 1,25 cm no corpo de texto.
+- Citação direta longa (> 3 linhas): recuo de 4,0 cm (113.386 pt), tamanho 10 pt, espaçamento 1,0 simples, sem aspas.
+- Capa institucional e Folha de rosto NBR 14724 com preâmbulo recuado a 8,0 cm (226.77 pt), tamanho 10 pt e espaçamento simples.
+- Numeração de páginas no canto superior direito a partir da introdução, suprimindo o número nas páginas pré-textuais (investigar SectionBreak, Header/Footer e FirstPageDifferent).
+- Sumário automático (TableOfContents nativo via Docs API vs. gerador estruturado ABNT).
+- Remoção programática de quebras de linha em excesso após a folha de rosto e entre parágrafos.
 
-### R2. Especificação Arquitetural para Solução dos Problemas de Formatação e Estilo
-Projetar e documentar a arquitetura técnica para eliminar falhas de integridade no documento Google Docs:
-- Prevenção ou cura do efeito cascata de negrito e estilos em substituições de texto (ex: isolamento de estilos ou aplicação automática de `NORMAL_TEXT`).
-- Prevenção do efeito cascata de listas (evitar bullets vazios em novas linhas).
-- Eliminação de quebras de linhas desnecessárias e espaços extras.
-- Aplicação de regras de formatação ABNT (recuo de 1,25 cm, entrelinhas 1,5, alinhamento justificado e margens 3/3/2/2).
+### R2. Diagnóstico das Ferramentas MCP Atuais
+Examinar a implementação atual dos pacotes Go (`internal/gdocs/abnt_writer.go`, `internal/gdocs/linter.go`, `internal/gdocs/inspector.go`, `internal/gdocs/cover_generator.go`, etc.) e avaliar o documento de teste `1IVQ271HdTfXywUhDBeXTUDDcZFP-KRvNEtJvxRy8Dp8` para identificar:
+- Por que o linter e o formatador não identificaram nem corrigiram variações indesejadas de entrelinhas (ex.: 1,15 vs 1,5).
+- Por que as quebras de linha espúrias após a folha de rosto não foram saneadas.
+- O que falta nas ferramentas de leitura e inspeção (`read_doc_content`, `inspect_doc_layout`) para expor metadados visuais e estruturais suficientes para que modelos de IA consigam enxergar e diagnosticar esses problemas.
 
-### R3. Arquitetura para Inserção de Tabelas Nativas e Diagramas Mermaid
-Projetar a integração de elementos visuais e tabulares do LaTeX no Google Docs:
-- Conversão de tabelas estruturadas do LaTeX em tabelas nativas do Google Docs através da API (`InsertTableRequest` e preenchimento de células).
-- Processamento de diagramas Mermaid (arquivos `.mmd` e `.pdf` em `resources/tcc/figuras`), convertendo-os em imagens (PNG) e inserindo-os no Google Docs via API (`InsertInlineImageRequest`) ou upload no Drive com referência inline.
+### R3. Plano Detalhado de Melhoria (/plan) por Ferramenta
+Elaborar um plano detalhado de engenharia (/plan) cobrindo cada ferramenta MCP (`format_document_abnt`, `lint_document_abnt`, `inspect_doc_layout`, `read_doc_content`, `cover_generator`):
+- Detalhar as assinaturas, payloads, regras de validação e endpoints de batchUpdate da API do Google Docs necessários para cada ferramenta.
+- Definir como as ferramentas devem cooperar para garantir que o formatador não desfaça formatações de citações diretas nem quebre a estrutura do documento.
 
-### R4. Especificação de Sincronização e Verificação de Integridade por Hash do PDF
-Projetar o fluxo de verificação de integridade entre o PDF compilado localmente em `resources/tcc` e o PDF armazenado no Google Drive, comparando o hash MD5 calculado do arquivo local com o campo `md5Checksum` retornado pela API do Google Drive v3.
-
-### R5. Plano de Implementação e Estratégia de Testes
-Elaborar um plano detalhado de implementação para o servidor Go `mcp-gdocs-latex`, especificando as ferramentas MCP novas ou refatoradas, cenários de testes automatizados (unitários e de integração com mocks) e validação prática utilizando a documentação e arquivos do TCC em `resources/tcc`.
+## Verification Resources
+- Documento de teste: `1IVQ271HdTfXywUhDBeXTUDDcZFP-KRvNEtJvxRy8Dp8`
+- Código-fonte: repositório Go em `c:\Projetos\golang\mcp-gdocs-latex`
+- Guia de Referência de Normas ABNT (NBR 14724) fornecido na solicitação.
 
 ## Acceptance Criteria
 
-### Pesquisa e Arquitetura de Formatação
-- [ ] O documento de arquitetura especifica as chamadas da API do Google Docs (`batchUpdate`) para isolar substituições de texto e impedir que novos parágrafos herdem estilos indevidos (como negrito de títulos).
-- [ ] A arquitetura especifica o tratamento de listas para evitar quebras com bullets vazios e a remoção de espaços e quebras supérfluas.
-- [ ] O mapeamento de formatação ABNT define os payloads de `UpdateParagraphStyleRequest` e `UpdateDocumentStyleRequest` para recuo de 1,25 cm, espaçamento 1,5, texto justificado e margens 3/3/2/2.
+### Diagnóstico e Viabilidade Técnica
+- [ ] Relatório técnico documentando a viabilidade de implementação na Google Docs API para todos os 8 pontos do Guia de Referência ABNT.
+- [ ] Identificação fundamentada no código atual e no documento `1IVQ271HdTfXywUhDBeXTUDDcZFP-KRvNEtJvxRy8Dp8` de por que variações de espaçamento (1,15 vs 1,5) e quebras de linha excessivas não foram sinalizadas ou corrigidas.
 
-### Tabelas e Diagramas Mermaid
-- [ ] A arquitetura define o fluxo técnico para converter tabelas LaTeX em tabelas nativas no Google Docs via `InsertTableRequest`.
-- [ ] O fluxo de conversão e inserção de diagramas Mermaid (`.mmd`/`.pdf`) em formato de imagem no Google Docs é especificado detalhadamente.
-
-### Verificação de Integridade e Plano de Ação
-- [ ] A verificação de sincronia entre o PDF local e o PDF no Google Drive é especificada comparando o hash MD5 local com o metadado `md5Checksum` da Google Drive API v3.
-- [ ] O plano de implementação apresenta o roteiro em etapas para o código Go, incluindo estratégias de testes automatizados e validação real com os arquivos de `resources/tcc`.
+### Plano de Engenharia (/plan)
+- [ ] Plano estruturado por ferramenta MCP com seções dedicadas para `format_document_abnt`, `lint_document_abnt`, `inspect_doc_layout`, `read_doc_content` e geradores de capa/folha de rosto.
+- [ ] Especificação dos mecanismos para detecção de citações longas e proteção de sua formatação durante a formatação geral do documento.
+- [ ] Diretrizes técnicas claras e acionáveis para guiar a implementação posterior no código Go sem ambiguidades.
