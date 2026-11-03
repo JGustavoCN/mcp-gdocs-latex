@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -312,13 +313,13 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 		}
 	}
 
-	// 3. Colapso de Linhas em Branco Consecutivas a partir da Página 3 (collapseBlankLines)
+	// 3. Colapso de Linhas em Branco no Corpo Textual (collapseBlankLines)
 	if collapseBlankLines {
 		content := doc.Body.Content
 		bodyEnd := content[len(content)-1].EndIndex
 
-		consecutiveBlanks := 0
 		var toDeleteRanges []*docs.Range
+		var tableDelimiterRanges []*docs.Range
 
 		for i := 0; i < len(content); i++ {
 			el := content[i]
@@ -327,70 +328,163 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 			}
 
 			if el.Table != nil {
-				consecutiveBlanks = 0
 				continue
 			}
 
 			if el.Paragraph != nil {
+				hasPageBreak := false
+				hasInlineObject := false
 				txt := ""
 				for _, pel := range el.Paragraph.Elements {
+					if pel.PageBreak != nil {
+						hasPageBreak = true
+					}
+					if pel.InlineObjectElement != nil {
+						hasInlineObject = true
+					}
 					if pel.TextRun != nil {
 						txt += pel.TextRun.Content
 					}
 				}
+
+				// Preservar rigorosamente: parágrafos com PageBreak ou InlineObjectElement JAMAIS podem ser adicionados para deleção
+				if hasPageBreak || hasInlineObject {
+					continue
+				}
+
 				t := strings.TrimSpace(txt)
 				if t == "" {
-					consecutiveBlanks++
-					// Checa se o próximo elemento é tabela (não pode deletar parágrafo pré-tabela)
+					// Checa se o elemento é adjacente a uma tabela (parágrafo delimitador técnico obrigatório)
 					isBeforeTable := false
 					if i+1 < len(content) && content[i+1].Table != nil {
 						isBeforeTable = true
 					}
-
-					// Checa se o próximo elemento é um título primário ou início de seção
-					isBeforeHeading := false
-					if i+1 < len(content) && content[i+1].Paragraph != nil {
-						nextTxt := ""
-						for _, npel := range content[i+1].Paragraph.Elements {
-							if npel.TextRun != nil {
-								nextTxt += npel.TextRun.Content
-							}
-						}
-						nextTrim := strings.TrimSpace(nextTxt)
-						if rePrimaryHeadingNum.MatchString(nextTrim) || rePrimaryHeadingNoNum.MatchString(nextTrim) ||
-							strings.HasPrefix(strings.ToUpper(nextTrim), "RESUMO") ||
-							strings.HasPrefix(strings.ToUpper(nextTrim), "ABSTRACT") {
-							isBeforeHeading = true
-						}
+					isAfterTable := false
+					if i > 0 && content[i-1].Table != nil {
+						isAfterTable = true
 					}
 
-					// Deleta se houver 2 ou mais vazias consecutivas, ou se for linha vazia imediatamente antes de título
-					if (consecutiveBlanks >= 2 || isBeforeHeading) && !isBeforeTable {
+					if isBeforeTable || isAfterTable {
+						// Preserva da deleção o parágrafo imediatamente adjacente à tabela para posterior neutralização de estilo
+						tableDelimiterRanges = append(tableDelimiterRanges, &docs.Range{
+							StartIndex: el.StartIndex,
+							EndIndex:   el.EndIndex,
+						})
+					} else {
+						// Parágrafo puramente vazio espúrio no corpo textual
 						toDeleteRanges = append(toDeleteRanges, &docs.Range{
 							StartIndex: el.StartIndex,
 							EndIndex:   el.EndIndex,
 						})
 					}
-				} else {
-					consecutiveBlanks = 0
 				}
 			}
 		}
 
-		// Deleta de trás para frente individualmente para manter a integridade dos índices
-		for i := len(toDeleteRanges) - 1; i >= 0; i-- {
-			r := toDeleteRanges[i]
-			req := &docs.BatchUpdateDocumentRequest{
-				Requests: []*docs.Request{
-					{
-						DeleteContentRange: &docs.DeleteContentRangeRequest{
-							Range: r,
+		// Neutraliza o estilo dos parágrafos delimitadores técnicos de tabela antes de alterar os índices do documento:
+		// Aplicar: NORMAL_TEXT, lineSpacing: 100, fontSize: 1pt, spaceAbove: 0, spaceBelow: 0
+		if len(tableDelimiterRanges) > 0 {
+			var neutReqs []*docs.Request
+			for _, r := range tableDelimiterRanges {
+				neutReqs = append(neutReqs, &docs.Request{
+					UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+						Range: r,
+						ParagraphStyle: &docs.ParagraphStyle{
+							NamedStyleType:  "NORMAL_TEXT",
+							Alignment:       "START",
+							LineSpacing:     ABNTLineSpacingSingle, // 100%
+							IndentFirstLine: &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+							IndentStart:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+							SpaceAbove:      &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+							SpaceBelow:      &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
 						},
+						Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow",
 					},
-				},
+				})
+				neutReqs = append(neutReqs, &docs.Request{
+					UpdateTextStyle: &docs.UpdateTextStyleRequest{
+						Range: r,
+						TextStyle: &docs.TextStyle{
+							FontSize: &docs.Dimension{Magnitude: 1.0, Unit: "PT"},
+						},
+						Fields: "fontSize",
+					},
+				})
 			}
-			if _, errDel := svc.Documents.BatchUpdate(documentID, req).Do(); errDel == nil {
-				collapsedBlanksCount++
+			if len(neutReqs) > 0 {
+				if _, errNeut := svc.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{Requests: neutReqs}).Do(); errNeut != nil {
+					log.Printf("[AVISO] HealDocTextAndBlanks: erro ao neutralizar delimitador de tabela: %v", errNeut)
+				}
+			}
+		}
+
+		// Saneamento Atômico em Lote Reverso:
+		// Ordenar toDeleteRanges por StartIndex decrescente
+		sort.Slice(toDeleteRanges, func(i, j int) bool {
+			return toDeleteRanges[i].StartIndex > toDeleteRanges[j].StartIndex
+		})
+
+		// Executar DeleteContentRangeRequest em lotes atômicos de até 100 requisições por batchUpdate
+		batchSize := 100
+		for start := 0; start < len(toDeleteRanges); start += batchSize {
+			end := start + batchSize
+			if end > len(toDeleteRanges) {
+				end = len(toDeleteRanges)
+			}
+			var delReqs []*docs.Request
+			for _, r := range toDeleteRanges[start:end] {
+				delReqs = append(delReqs, &docs.Request{
+					DeleteContentRange: &docs.DeleteContentRangeRequest{
+						Range: r,
+					},
+				})
+			}
+			if len(delReqs) > 0 {
+				req := &docs.BatchUpdateDocumentRequest{Requests: delReqs}
+				if _, errDel := svc.Documents.BatchUpdate(documentID, req).Do(); errDel == nil {
+					collapsedBlanksCount += len(delReqs)
+				} else {
+					log.Printf("[AVISO] HealDocTextAndBlanks: lote falhou (%v). Executando fallback individual resiliente...", errDel)
+					// Fallback resiliente: tenta deletar cada parágrafo individualmente (de trás para frente)
+					for _, delReq := range delReqs {
+						singleReq := &docs.BatchUpdateDocumentRequest{Requests: []*docs.Request{delReq}}
+						if _, errSingle := svc.Documents.BatchUpdate(documentID, singleReq).Do(); errSingle == nil {
+							collapsedBlanksCount++
+						} else {
+							log.Printf("[DEBUG] HealDocTextAndBlanks: parágrafo [%d-%d] não pôde ser deletado (protegido pela API): %v. Neutralizando estilo...",
+								delReq.DeleteContentRange.Range.StartIndex, delReq.DeleteContentRange.Range.EndIndex, errSingle)
+							neutSingle := &docs.BatchUpdateDocumentRequest{
+								Requests: []*docs.Request{
+									{
+										UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+											Range: delReq.DeleteContentRange.Range,
+											ParagraphStyle: &docs.ParagraphStyle{
+												NamedStyleType:  "NORMAL_TEXT",
+												Alignment:       "START",
+												LineSpacing:     ABNTLineSpacingSingle,
+												IndentFirstLine: &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+												IndentStart:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+												SpaceAbove:      &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+												SpaceBelow:      &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+											},
+											Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow",
+										},
+									},
+									{
+										UpdateTextStyle: &docs.UpdateTextStyleRequest{
+											Range: delReq.DeleteContentRange.Range,
+											TextStyle: &docs.TextStyle{
+												FontSize: &docs.Dimension{Magnitude: 1.0, Unit: "PT"},
+											},
+											Fields: "fontSize",
+										},
+									},
+								},
+							}
+							svc.Documents.BatchUpdate(documentID, neutSingle).Do()
+						}
+					}
+				}
 			}
 		}
 	}
@@ -473,6 +567,125 @@ func FormatDocumentABNT(ctx context.Context, documentID string, startIndex, endI
 		cleanLatexCmds = cleanLatex[0]
 	}
 	return FormatDocumentABNTExtended(ctx, documentID, startIndex, endIndex, applyMargins, cleanLatexCmds, ABNTDefaultFontFamily, true, true, false)
+}
+
+// EnsureChapterPageBreaks garante a inserção de PageBreak antes de capítulos primários e REFERÊNCIAS (NBR 14724)
+func EnsureChapterPageBreaks(ctx context.Context, documentID string) error {
+	svc, err := GetDocsService(ctx)
+	if err != nil {
+		return fmt.Errorf("erro ao obter docs service: %w", err)
+	}
+
+	doc, err := svc.Documents.Get(documentID).Do()
+	if err != nil {
+		return fmt.Errorf("erro ao carregar documento: %w", err)
+	}
+
+	if doc.Body == nil || len(doc.Body.Content) == 0 {
+		return nil
+	}
+
+	content := doc.Body.Content
+	var pbRequests []*docs.Request
+
+	// Varre em ordem reversa (do fim para o início) para construir o lote reverso de quebras
+	for i := len(content) - 1; i >= 0; i-- {
+		el := content[i]
+		if el.Paragraph == nil {
+			continue
+		}
+
+		pText := ""
+		for _, pel := range el.Paragraph.Elements {
+			if pel.TextRun != nil {
+				pText += pel.TextRun.Content
+			}
+		}
+		trimmed := strings.TrimSpace(pText)
+		upperTrim := strings.ToUpper(trimmed)
+
+		// Verifica se é capítulo primário numerado (ex: "1 INTRODUÇÃO", "2 FUNDAMENTAÇÃO...", "3 METODOLOGIA")
+		// ou REFERÊNCIAS
+		isPrimaryChapter := rePrimaryHeadingNum.MatchString(trimmed)
+		isReferences := upperTrim == "REFERÊNCIAS" || strings.HasPrefix(upperTrim, "REFERÊNCIAS") || trimmed == "3 REFERÊNCIAS"
+
+		if !isPrimaryChapter && !isReferences {
+			continue
+		}
+
+		// Capítulos primários no início absoluto do documento não necessitam de quebra
+		if el.StartIndex <= 1 {
+			continue
+		}
+
+		// Checa se já possui quebra de página anterior
+		hasPrevPageBreak := false
+
+		// 1) Checa se o próprio parágrafo contém PageBreak antes do texto
+		for _, pel := range el.Paragraph.Elements {
+			if pel.PageBreak != nil {
+				hasPrevPageBreak = true
+				break
+			}
+			if pel.TextRun != nil && strings.TrimSpace(pel.TextRun.Content) != "" {
+				break
+			}
+		}
+
+		// 2) Checa os elementos anteriores (recuando até achar conteúdo não vazio)
+		if !hasPrevPageBreak {
+			for k := i - 1; k >= 0; k-- {
+				prevEl := content[k]
+				if prevEl.Paragraph != nil {
+					pHasPb := false
+					for _, pel := range prevEl.Paragraph.Elements {
+						if pel.PageBreak != nil {
+							pHasPb = true
+							break
+						}
+					}
+					if pHasPb {
+						hasPrevPageBreak = true
+						break
+					}
+
+					prevTxt := ""
+					for _, pel := range prevEl.Paragraph.Elements {
+						if pel.TextRun != nil {
+							prevTxt += pel.TextRun.Content
+						}
+					}
+					if strings.TrimSpace(prevTxt) != "" {
+						break
+					}
+				} else {
+					// Se for tabela ou outro elemento estrutural, não há PageBreak
+					break
+				}
+			}
+		}
+
+		if !hasPrevPageBreak {
+			pbRequests = append(pbRequests, &docs.Request{
+				InsertPageBreak: &docs.InsertPageBreakRequest{
+					Location: &docs.Location{
+						Index: el.StartIndex,
+					},
+				},
+			})
+		}
+	}
+
+	if len(pbRequests) > 0 {
+		_, errPb := svc.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{Requests: pbRequests}).Do()
+		if errPb != nil {
+			log.Printf("[AVISO] EnsureChapterPageBreaks: erro ao inserir quebras: %v", errPb)
+			return errPb
+		}
+		log.Printf("[INFO] Inseridas %d quebras de página de capítulos (NBR 14724)", len(pbRequests))
+	}
+
+	return nil
 }
 
 // FormatDocumentABNTExtended formata o documento aplicando família de fonte unificada e todas as regras ABNT
@@ -652,6 +865,14 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 		}
 	}
 
+	// ─── ETAPA 1.6: Garantia de Quebras de Página de Capítulos (NBR 14724) ───
+	if errChapPb := EnsureChapterPageBreaks(ctx, documentID); errChapPb == nil {
+		doc, err = svc.Documents.Get(documentID).Do()
+		if err != nil {
+			return "", fmt.Errorf("erro ao recarregar documento pós-quebras de capítulo: %w", err)
+		}
+	}
+
 	bodyEnd := getBodyEndIndex(doc)
 	start := int64(1)
 	end := bodyEnd - 1
@@ -707,7 +928,8 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 	metaTCC, _ := latex.ParseTCCMetadata("")
 
 	// ─── ETAPA 3: Formatação Estrutural ABNT Elemento a Elemento ───
-	for _, el := range doc.Body.Content {
+	content := doc.Body.Content
+	for _, el := range content {
 		// Elemento fora do range solicitado
 		if el.EndIndex <= start || el.StartIndex >= end {
 			continue
@@ -832,18 +1054,72 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 							},
 						})
 					}
+				} else {
+					// Pós-início textual: qualquer parágrafo vazio residual ou delimitador técnico de tabela
+					// é sumariamente neutralizado para evitar espaçamentos verticais anômalos (como HEADING_1 herdado)
+					requests = append(requests, &docs.Request{
+						UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+							Range: pRange,
+							ParagraphStyle: &docs.ParagraphStyle{
+								NamedStyleType:  "NORMAL_TEXT",
+								Alignment:       "START",
+								LineSpacing:     ABNTLineSpacingSingle, // 100%
+								IndentFirstLine: &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								IndentStart:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								SpaceAbove:      &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								SpaceBelow:      &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+							},
+							Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow",
+						},
+					})
+					requests = append(requests, &docs.Request{
+						UpdateTextStyle: &docs.UpdateTextStyleRequest{
+							Range: pRange,
+							TextStyle: &docs.TextStyle{
+								FontSize: &docs.Dimension{Magnitude: 1.0, Unit: "PT"},
+							},
+							Fields: "fontSize",
+						},
+					})
 				}
 				continue
 			}
 
 			// Identificação hierárquica segundo NBR 6024 e ABNT 2026
-			isHeading1Num := rePrimaryHeadingNum.MatchString(trimmed) || (currentStyle == "HEADING_1" && !rePrimaryHeadingNoNum.MatchString(trimmed) && len(trimmed) < 120)
+			// 1. Títulos Primários Canônicos (por Regex)
+			isHeading1Num := rePrimaryHeadingNum.MatchString(trimmed)
 			isHeading1NoNum := rePrimaryHeadingNoNum.MatchString(trimmed) || trimmed == "3 REFERÊNCIAS"
-			isHeading2 := reSecondaryHeading.MatchString(trimmed) || (currentStyle == "HEADING_2" && len(trimmed) < 120)
-			isHeading3 := reTertiaryHeading.MatchString(trimmed) || (currentStyle == "HEADING_3" && len(trimmed) < 120)
-			isHeading4 := reQuaternaryHeading.MatchString(trimmed) || (currentStyle == "HEADING_4" && len(trimmed) < 120)
 
-			// Enriquecimento semântico: se o parágrafo for curto e coincidir com seção do TCC
+			// 2. Títulos Secundários, Terciários e Quaternários por REGEX (precedência sobre HEADING_1)
+			isHeading2 := reSecondaryHeading.MatchString(trimmed)
+			isHeading3 := reTertiaryHeading.MatchString(trimmed)
+			isHeading4 := reQuaternaryHeading.MatchString(trimmed)
+
+			if isHeading2 || isHeading3 || isHeading4 {
+				isHeading1Num = false
+				isHeading1NoNum = false
+			}
+
+			// 3. Fallback para estilos existentes apenas se NÃO corresponder a regex de nenhum outro nível
+			if !isHeading1Num && !isHeading1NoNum && !isHeading2 && !isHeading3 && !isHeading4 {
+				if currentStyle == "HEADING_1" && len(trimmed) < 120 &&
+					!reSecondaryHeading.MatchString(trimmed) &&
+					!reTertiaryHeading.MatchString(trimmed) &&
+					!reQuaternaryHeading.MatchString(trimmed) {
+					isHeading1Num = true
+				} else if currentStyle == "HEADING_2" && len(trimmed) < 120 &&
+					!reTertiaryHeading.MatchString(trimmed) &&
+					!reQuaternaryHeading.MatchString(trimmed) {
+					isHeading2 = true
+				} else if currentStyle == "HEADING_3" && len(trimmed) < 120 &&
+					!reQuaternaryHeading.MatchString(trimmed) {
+					isHeading3 = true
+				} else if currentStyle == "HEADING_4" && len(trimmed) < 120 {
+					isHeading4 = true
+				}
+			}
+
+			// 4. Enriquecimento semântico: se o parágrafo for curto e coincidir com seção do TCC
 			if !isHeading1Num && !isHeading1NoNum && !isHeading2 && !isHeading3 && !isHeading4 && len(trimmed) < 120 {
 				cleanTrim := strings.ToLower(trimmed)
 				if ks, found := knownByTitle[cleanTrim]; found {
@@ -858,6 +1134,15 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 						isHeading4 = true
 					}
 				}
+			}
+
+			// 5. Orações que terminam com dois pontos (:) são introduções de listas/enumerações, NÃO títulos ABNT
+			if strings.HasSuffix(trimmed, ":") {
+				isHeading1Num = false
+				isHeading1NoNum = false
+				isHeading2 = false
+				isHeading3 = false
+				isHeading4 = false
 			}
 
 			isCaption := strings.HasPrefix(trimmed, "Figura ") ||
@@ -880,7 +1165,8 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			}
 			isLongQuote := (existingIndent >= 85.0 || (existingFontSize <= 10.5 && len(trimmed) > 150)) &&
 				!isHeading1Num && !isHeading1NoNum && !isHeading2 && !isHeading3 && !isHeading4 &&
-				!isCaption && !isSource && !isPreTextualNote(trimmed)
+				!isCaption && !isSource && !isPreTextualNote(trimmed) &&
+				!strings.HasSuffix(trimmed, ":")
 
 			// ── CASO A: TÍTULO PRIMÁRIO NUMERADO (HEADING_1 - Ex: 1 INTRODUÇÃO, 2 REFERENCIAL TEÓRICO) ──
 			if isHeading1Num {
@@ -1103,10 +1389,10 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 								NamedStyleType:      "NORMAL_TEXT",
 								Alignment:           "JUSTIFIED",
 								LineSpacing:         ABNTLineSpacingSingle,
-								IndentFirstLine:     &docs.Dimension{Magnitude: ABNTIndentPreTextualNotePt, Unit: "PT"}, // 8.0 cm (igual a IndentStart para que a 1ª linha alinhe à direita no bloco)
+								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}}, // ABNT NBR 14724: primeira linha alinhada ao bloco de 8.0 cm
 								IndentStart:         &docs.Dimension{Magnitude: ABNTIndentPreTextualNotePt, Unit: "PT"}, // 8.0 cm (metade da página até margem direita)
-								SpaceAbove:          &docs.Dimension{Magnitude: spAbove, Unit: "PT"},
-								SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
+								SpaceAbove:          &docs.Dimension{Magnitude: spAbove, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
 								AvoidWidowAndOrphan: true,
 							},
 							Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",

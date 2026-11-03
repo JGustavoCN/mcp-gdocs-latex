@@ -321,7 +321,7 @@ func GenerateABNTIFSCoverAndTitlePage(ctx context.Context, documentID string, me
 
 	// Título do Trabalho
 	sb.WriteString(strings.ToUpper(meta.Titulo))
-	sb.WriteString(strings.Repeat("\n", 18)) // 18 quebras vazias (calibração \vfill) para empurrar Local e Ano para a margem inferior da Capa
+	sb.WriteString(strings.Repeat("\n", 24)) // 24 quebras vazias (calibração \vfill) para empurrar Local e Ano para a margem inferior da Capa
 
 	// Local e Ano
 	sb.WriteString(strings.ToUpper(meta.Local))
@@ -347,7 +347,7 @@ func GenerateABNTIFSCoverAndTitlePage(ctx context.Context, documentID string, me
 		sbFR.WriteString("\nCoorientador: ")
 		sbFR.WriteString(meta.Coorientador)
 	}
-	sbFR.WriteString(strings.Repeat("\n", 14)) // 14 quebras vazias (calibração \vfill) para empurrar Local e Ano para a margem inferior da Folha de Rosto
+	sbFR.WriteString(strings.Repeat("\n", 23)) // 23 quebras vazias (calibração \vfill) para empurrar Local e Ano para a margem inferior da Folha de Rosto
 
 	// Local e Ano
 	sbFR.WriteString(strings.ToUpper(meta.Local))
@@ -811,9 +811,9 @@ func EnsurePreTextualPageBreaksAndLayout(ctx context.Context, documentID string)
 					}
 				}
 
-				targetEmpty := 18
+				targetEmpty := 24
 				if cityIndex >= 2 {
-					targetEmpty = 13 // 13 quebras na Folha de Rosto mantêm LAGARTO/2026 no rodapé sem estourar
+					targetEmpty = 23 // 23 quebras na Folha de Rosto mantêm LAGARTO/2026 no rodapé sem estourar
 				}
 				needed := targetEmpty - emptyCount
 				if needed > 0 {

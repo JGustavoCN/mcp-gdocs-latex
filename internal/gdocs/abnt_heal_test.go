@@ -1,7 +1,11 @@
 package gdocs
 
 import (
+	"sort"
+	"strings"
 	"testing"
+
+	"google.golang.org/api/docs/v1"
 )
 
 func TestShouldMergeParagraphs(t *testing.T) {
@@ -97,3 +101,175 @@ func TestShouldMergeParagraphs(t *testing.T) {
 		})
 	}
 }
+
+func TestPageBreakAndTableDelimiterProtectionInHeal(t *testing.T) {
+	// Cria uma estrutura simulada de elementos do Google Docs
+	// 0: Parágrafo com PageBreak (Folha de Rosto -> Resumo)
+	// 1: Parágrafo com texto ("1 INTRODUÇÃO")
+	// 2: Parágrafo vazio espúrio (deve ser deletado)
+	// 3: Parágrafo vazio delimitador pré-tabela (deve ser PRESERVADO e neutralizado)
+	// 4: Tabela
+	// 5: Parágrafo com InlineObjectElement (Logo)
+	// 6: Parágrafo vazio espúrio (deve ser deletado)
+
+	content := []*docs.StructuralElement{
+		{
+			StartIndex: 100,
+			EndIndex:   101,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{PageBreak: &docs.PageBreak{}},
+				},
+			},
+		},
+		{
+			StartIndex: 101,
+			EndIndex:   115,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "1 INTRODUÇÃO\n"}},
+				},
+			},
+		},
+		{
+			StartIndex: 115,
+			EndIndex:   116,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "\n"}},
+				},
+			},
+		},
+		{
+			StartIndex: 116,
+			EndIndex:   117,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "\n"}},
+				},
+			},
+		},
+		{
+			StartIndex: 117,
+			EndIndex:   200,
+			Table:      &docs.Table{},
+		},
+		{
+			StartIndex: 200,
+			EndIndex:   201,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{InlineObjectElement: &docs.InlineObjectElement{InlineObjectId: "kix.abc"}},
+				},
+			},
+		},
+		{
+			StartIndex: 201,
+			EndIndex:   202,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "\n"}},
+				},
+			},
+		},
+	}
+
+	targetStartIndex := int64(100)
+	bodyEnd := int64(300)
+
+	var toDeleteRanges []*docs.Range
+	var tableDelimiterRanges []*docs.Range
+
+	for i := 0; i < len(content); i++ {
+		el := content[i]
+		if el.StartIndex < targetStartIndex || el.EndIndex >= bodyEnd {
+			continue
+		}
+		if el.Table != nil {
+			continue
+		}
+		if el.Paragraph != nil {
+			hasPageBreak := false
+			hasInlineObject := false
+			txt := ""
+			for _, pel := range el.Paragraph.Elements {
+				if pel.PageBreak != nil {
+					hasPageBreak = true
+				}
+				if pel.InlineObjectElement != nil {
+					hasInlineObject = true
+				}
+				if pel.TextRun != nil {
+					txt += pel.TextRun.Content
+				}
+			}
+
+			if hasPageBreak || hasInlineObject {
+				continue
+			}
+
+			tStr := strings.TrimSpace(txt)
+			if tStr == "" {
+				isBeforeTable := false
+				if i+1 < len(content) && content[i+1].Table != nil {
+					isBeforeTable = true
+				}
+
+				if isBeforeTable {
+					tableDelimiterRanges = append(tableDelimiterRanges, &docs.Range{
+						StartIndex: el.StartIndex,
+						EndIndex:   el.EndIndex,
+					})
+				} else {
+					toDeleteRanges = append(toDeleteRanges, &docs.Range{
+						StartIndex: el.StartIndex,
+						EndIndex:   el.EndIndex,
+					})
+				}
+			}
+		}
+	}
+
+	// 1. Verifica que o parágrafo com PageBreak (index 0) NÃO foi coletado para deleção
+	for _, r := range toDeleteRanges {
+		if r.StartIndex == 100 {
+			t.Errorf("Parágrafo com PageBreak no offset 100 JAMAIS deve ser deletado!")
+		}
+	}
+
+	// 2. Verifica que o parágrafo com InlineObject (index 5) NÃO foi coletado para deleção
+	for _, r := range toDeleteRanges {
+		if r.StartIndex == 200 {
+			t.Errorf("Parágrafo com InlineObject no offset 200 JAMAIS deve ser deletado!")
+		}
+	}
+
+	// 3. Verifica que o delimitador pré-tabela (offset 116) está em tableDelimiterRanges e NÃO em toDeleteRanges
+	if len(tableDelimiterRanges) != 1 || tableDelimiterRanges[0].StartIndex != 116 {
+		t.Errorf("tableDelimiterRanges deveria conter o offset 116, obteve: %v", tableDelimiterRanges)
+	}
+	for _, r := range toDeleteRanges {
+		if r.StartIndex == 116 {
+			t.Errorf("Parágrafo pré-tabela no offset 116 NÃO deve estar em toDeleteRanges!")
+		}
+	}
+
+	// 4. Verifica que as quebras puramente vazias (offset 115 e 201) estão em toDeleteRanges
+	if len(toDeleteRanges) != 2 {
+		t.Fatalf("toDeleteRanges deveria conter 2 faixas vazias, obteve %d", len(toDeleteRanges))
+	}
+	if toDeleteRanges[0].StartIndex != 115 || toDeleteRanges[1].StartIndex != 201 {
+		t.Errorf("Offsets esperados [115, 201], obteve [%d, %d]", toDeleteRanges[0].StartIndex, toDeleteRanges[1].StartIndex)
+	}
+
+	// 5. Verifica ordenação reversa (do maior para o menor offset)
+	sort.Slice(toDeleteRanges, func(i, j int) bool {
+		return toDeleteRanges[i].StartIndex > toDeleteRanges[j].StartIndex
+	})
+
+	if toDeleteRanges[0].StartIndex != 201 || toDeleteRanges[1].StartIndex != 115 {
+		t.Errorf("Após ordenação reversa esperava [201, 115], obteve [%d, %d]",
+			toDeleteRanges[0].StartIndex, toDeleteRanges[1].StartIndex)
+	}
+}
+

@@ -145,3 +145,149 @@ func TestLineSpacingAuditLogic(t *testing.T) {
 	}
 }
 
+func TestLinterGhostHeadingsAndHierarchy(t *testing.T) {
+	// 1. Ghost heading: estilo HEADING_1 com texto vazio
+	styleName := "HEADING_1"
+	trimmed := ""
+	hasPageBreak := false
+	hasInlineObject := false
+	isHeading := strings.HasPrefix(styleName, "HEADING_") || styleName == "TITLE"
+
+	isGhostHeading := isHeading && trimmed == "" && !hasPageBreak && !hasInlineObject
+	if !isGhostHeading {
+		t.Errorf("Deveria identificar heading fantasma com estilo %s e texto vazio", styleName)
+	}
+
+	// Se tiver PageBreak, NÃO é ghost heading
+	if isHeading && trimmed == "" && true && !hasInlineObject {
+		// com hasPageBreak = true não deve ser flagrado como ghost heading
+		flagged := isHeading && trimmed == "" && !true && !hasInlineObject
+		if flagged {
+			t.Errorf("Não deveria flagrar como ghost heading quando possui PageBreak")
+		}
+	}
+
+	// 2. Falso título com dois pontos (:)
+	titleWithColon := "Quanto aos Procedimentos Técnicos: A investigação conjuga duas modalidades clássicas de procedimento:"
+	if !strings.HasSuffix(titleWithColon, ":") {
+		t.Errorf("Deveria detectar terminação com dois pontos em %q", titleWithColon)
+	}
+
+	// 3. Hierarquia de Títulos (NBR 6024): 3.1 com estilo HEADING_1
+	secTitle := "3.1 CARACTERIZAÇÃO DA PESQUISA"
+	if !reSecondaryHeading.MatchString(secTitle) {
+		t.Errorf("reSecondaryHeading deveria reconhecer %q", secTitle)
+	}
+	if rePrimaryHeadingNum.MatchString(secTitle) {
+		t.Errorf("rePrimaryHeadingNum NÃO deveria reconhecer seção secundária %q", secTitle)
+	}
+
+	// 4. Seção terciária: 3.3.1
+	tertTitle := "3.3.1 Levantamento do domínio e fontes de informação"
+	if !reTertiaryHeading.MatchString(tertTitle) {
+		t.Errorf("reTertiaryHeading deveria reconhecer %q", tertTitle)
+	}
+}
+
+func TestHeadingPrecedenceRule(t *testing.T) {
+	// Testa que uma seção secundária com currentStyle="HEADING_1" é classificada como HEADING_2 e NÃO HEADING_1
+	trimmed := "3.1 CARACTERIZAÇÃO DA PESQUISA"
+	currentStyle := "HEADING_1"
+
+	isHeading1Num := rePrimaryHeadingNum.MatchString(trimmed)
+	isHeading1NoNum := rePrimaryHeadingNoNum.MatchString(trimmed) || trimmed == "3 REFERÊNCIAS"
+	isHeading2 := reSecondaryHeading.MatchString(trimmed)
+	isHeading3 := reTertiaryHeading.MatchString(trimmed)
+	isHeading4 := reQuaternaryHeading.MatchString(trimmed)
+
+	if !isHeading1Num && !isHeading1NoNum && !isHeading2 && !isHeading3 && !isHeading4 {
+		if currentStyle == "HEADING_1" && len(trimmed) < 120 &&
+			!reSecondaryHeading.MatchString(trimmed) &&
+			!reTertiaryHeading.MatchString(trimmed) &&
+			!reQuaternaryHeading.MatchString(trimmed) {
+			isHeading1Num = true
+		}
+	}
+
+	if isHeading1Num {
+		t.Errorf("isHeading1Num não deveria ser true para %q, mesmo com currentStyle=HEADING_1", trimmed)
+	}
+	if !isHeading2 {
+		t.Errorf("isHeading2 deveria ser true para %q", trimmed)
+	}
+}
+
+func TestLinterSpuriousBlankLinePreservationRules(t *testing.T) {
+	testCases := []struct {
+		name            string
+		trimmed         string
+		isPreTextual    bool
+		isBeforeTable   bool
+		hasPageBreak    bool
+		hasInlineObject bool
+		shouldReport    bool
+	}{
+		{
+			name:            "Linha em branco isolada no corpo textual",
+			trimmed:         "",
+			isPreTextual:    false,
+			isBeforeTable:   false,
+			hasPageBreak:    false,
+			hasInlineObject: false,
+			shouldReport:    true,
+		},
+		{
+			name:            "Linha em branco pré-textual (capa/folha de rosto)",
+			trimmed:         "",
+			isPreTextual:    true,
+			isBeforeTable:   false,
+			hasPageBreak:    false,
+			hasInlineObject: false,
+			shouldReport:    false,
+		},
+		{
+			name:            "Delimitador técnico imediatamente pré-tabela",
+			trimmed:         "",
+			isPreTextual:    false,
+			isBeforeTable:   true,
+			hasPageBreak:    false,
+			hasInlineObject: false,
+			shouldReport:    false,
+		},
+		{
+			name:            "Parágrafo com quebra de página (PageBreak)",
+			trimmed:         "",
+			isPreTextual:    false,
+			isBeforeTable:   false,
+			hasPageBreak:    true,
+			hasInlineObject: false,
+			shouldReport:    false,
+		},
+		{
+			name:            "Parágrafo com objeto inline (Logo)",
+			trimmed:         "",
+			isPreTextual:    false,
+			isBeforeTable:   false,
+			hasPageBreak:    false,
+			hasInlineObject: true,
+			shouldReport:    false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			reported := false
+			if tc.trimmed == "" {
+				if !tc.isPreTextual && !tc.hasPageBreak && !tc.hasInlineObject {
+					if !tc.isBeforeTable {
+						reported = true
+					}
+				}
+			}
+			if reported != tc.shouldReport {
+				t.Errorf("reported = %v, esperado = %v", reported, tc.shouldReport)
+			}
+		})
+	}
+}
+

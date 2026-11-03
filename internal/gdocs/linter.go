@@ -439,8 +439,16 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			pText := ""
 			pBoldLen := 0
 			hasSoftBreak := false
+			hasPageBreak := false
+			hasInlineObject := false
 
 			for _, pEl := range p.Elements {
+				if pEl.PageBreak != nil {
+					hasPageBreak = true
+				}
+				if pEl.InlineObjectElement != nil {
+					hasInlineObject = true
+				}
 				if pEl.TextRun != nil {
 					tr := pEl.TextRun
 					txt := tr.Content
@@ -894,6 +902,9 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				} else if isHeadingItem {
 					expectedSpacing = 150.0
 					contextType = "Título de Seção (ABNT: entrelinhas 1,5)"
+				} else if isPreTextualNote(trimmed) {
+					expectedSpacing = 100.0
+					contextType = "Nota Institucional / Preâmbulo (Folha de Rosto: espaçamento simples)"
 				} else if currentState == statePostTextual {
 					expectedSpacing = 100.0
 					contextType = "Referências Bibliográficas (ABNT NBR 6023: espaçamento simples)"
@@ -937,17 +948,65 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				}
 			}
 
-			// Parágrafo vazio ou quebra múltipla
+			// Headings Fantasmas: parágrafos com estilo HEADING_X e sem texto (trimmed == "")
+			if isHeading && trimmed == "" && !hasPageBreak && !hasInlineObject {
+				report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+					ElementIndex: i,
+					StartIndex:   el.StartIndex,
+					EndIndex:     el.EndIndex,
+					SectionTitle: "[Heading Vazio]",
+					Severity:     "CRÍTICO",
+					RuleViolated: "ABNT NBR 6024: Heading fantasma / Título de seção sem texto",
+					Details:      fmt.Sprintf("Elemento %d [%d-%d] possui estilo %s mas não contém texto. Provoca espaçamento vertical artificial indevido e poluição estrutural.", i, el.StartIndex, el.EndIndex, styleName),
+				})
+			}
+
+			// Hierarquia de Títulos (NBR 6024): seções com numeração secundária formatadas como HEADING_1
+			if (styleName == "HEADING_1" || styleName == "TITLE") && reSecondaryHeading.MatchString(trimmed) {
+				report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+					ElementIndex: i,
+					StartIndex:   el.StartIndex,
+					EndIndex:     el.EndIndex,
+					SectionTitle: trimmed,
+					Severity:     "ALERTA",
+					RuleViolated: "ABNT NBR 6024: Seção secundária formatada indevidamente como título primário (HEADING_1)",
+					Details:      fmt.Sprintf("O título %q é uma seção secundária (numeração 2 níveis) mas está estilizado como HEADING_1 (esperado: HEADING_2 sem negrito).", trimmed),
+				})
+			}
+
+			// Falso título: parágrafos que terminam com ':' são orações introdutórias, não títulos formais ABNT
+			if isHeading && strings.HasSuffix(trimmed, ":") {
+				report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+					ElementIndex: i,
+					StartIndex:   el.StartIndex,
+					EndIndex:     el.EndIndex,
+					SectionTitle: trimmed,
+					Severity:     "ALERTA",
+					RuleViolated: "ABNT NBR 6024: Títulos formais de seção não terminam com dois pontos (:)",
+					Details:      fmt.Sprintf("O parágrafo %q termina com ':' indicando oração introdutória de enumeração/lista. Deve ser formatado como texto normal (NORMAL_TEXT).", trimmed),
+				})
+			}
+
+			// Parágrafo vazio ou quebra espúria
 			// ABNT NBR 14724: Espaçamentos verticais na Capa e Folha de Rosto (elementos pré-textuais)
-			// são canônicos e regulamentares para distribuição dos blocos. A auditoria de quebras
-			// excessivas atua estritamente na parte textual e pós-textual para evitar falsos positivos.
+			// são canônicos para distribuição dos blocos. Na parte textual e pós-textual,
+			// a demarcação entre parágrafos é conferida exclusivamente pelo recuo de 1,25cm e entrelinhas 1,5.
+			// Qualquer parágrafo vazio intercalado (exceto o delimitador técnico pré-tabela e elementos com PageBreak/InlineObject) é espúrio.
 			if trimmed == "" {
-				if currentState != statePreTextual {
+				if currentState != statePreTextual && !hasPageBreak && !hasInlineObject {
 					consecutiveEmptyParas++
-					if consecutiveEmptyParas >= 2 {
+					isBeforeTable := false
+					if i+1 < len(doc.Body.Content) && doc.Body.Content[i+1].Table != nil {
+						isBeforeTable = true
+					}
+					isAfterTable := false
+					if i > 0 && doc.Body.Content[i-1].Table != nil {
+						isAfterTable = true
+					}
+					if !isBeforeTable && !isAfterTable {
 						report.ConsecutiveBlankLines = append(report.ConsecutiveBlankLines,
-							fmt.Sprintf("Elemento %d [%d-%d]: Quebra múltipla / Linha em branco excessiva (#%d)",
-								i, el.StartIndex, el.EndIndex, consecutiveEmptyParas))
+							fmt.Sprintf("Elemento %d [%d-%d]: Linha em branco espúria no corpo do texto (ABNT NBR 14724: parágrafos contíguos são demarcados pelo recuo 1,25cm e entrelinhas 1,5, sem linhas em branco intercaladas)",
+								i, el.StartIndex, el.EndIndex))
 					}
 				}
 			} else {
@@ -1120,23 +1179,23 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 									Details:      "O texto da nota foi cortado antes da conclusão. Execute 'format_document_abnt' para restaurar o preâmbulo completo.",
 								})
 							}
-							if indentStart < 200.0 || indentFirstLine < 200.0 || align != "JUSTIFIED" {
-								coverIssues = append(coverIssues, "Nota institucional da Folha de Rosto sem recuo de 8.0cm à direita / justificado (ou 1ª linha desalinhada)")
+							if indentStart < 200.0 || indentFirstLine > 5.0 || indentFirstLine < -5.0 || align != "JUSTIFIED" {
+								coverIssues = append(coverIssues, "Nota institucional da Folha de Rosto sem recuo de 8.0cm à direita / justificado (ou 1ª linha desalinhada do bloco)")
 								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
 									ElementIndex: idx,
 									StartIndex:   el.StartIndex,
 									EndIndex:     el.EndIndex,
 									SectionTitle: "Folha de Rosto (Nota de Apresentação)",
 									Severity:     "ALERTA",
-									RuleViolated: "ABNT NBR 14724: Nota de apresentação deve possuir recuo de 8.0cm à esquerda (metade da página) com 1ª linha alinhada e texto justificado",
-									Details:      fmt.Sprintf("Recuo corpo: %.1f pt, Recuo 1ª linha: %.1f pt (esperado: >= 212.6 pt / 8.0cm).", indentStart, indentFirstLine),
+									RuleViolated: "ABNT NBR 14724: Nota de apresentação deve possuir recuo de 8.0cm à esquerda (metade da página) com 1ª linha alinhada ao bloco e texto justificado",
+									Details:      fmt.Sprintf("Recuo corpo: %.1f pt (esperado: >= 212.6 pt / 8.0cm), Recuo 1ª linha: %.1f pt (esperado: 0 pt / alinhado ao bloco).", indentStart, indentFirstLine),
 								})
 							}
 						}
 
 						// Audita alinhamento do Orientador na folha de rosto
 						if strings.HasPrefix(trimmed, "Orientador:") || strings.HasPrefix(trimmed, "Orientadora:") {
-							if indentStart < 200.0 || indentFirstLine < 200.0 {
+							if indentStart < 200.0 || indentFirstLine > 5.0 || indentFirstLine < -5.0 {
 								coverIssues = append(coverIssues, "Orientador na Folha de Rosto não está alinhado à direita junto ao bloco da nota institucional")
 								report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
 									ElementIndex: idx,
@@ -1145,7 +1204,7 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 									SectionTitle: "Folha de Rosto (Orientador)",
 									Severity:     "ALERTA",
 									RuleViolated: "ABNT NBR 14724: O Orientador deve ser formatado no mesmo alinhamento de bloco à direita da nota de apresentação (recuo 8.0cm)",
-									Details:      fmt.Sprintf("Recuo corpo: %.1f pt, Recuo 1ª linha: %.1f pt (esperado: >= 212.6 pt / 8.0cm).", indentStart, indentFirstLine),
+									Details:      fmt.Sprintf("Recuo corpo: %.1f pt (esperado: >= 212.6 pt / 8.0cm), Recuo 1ª linha: %.1f pt (esperado: 0 pt / alinhado ao bloco).", indentStart, indentFirstLine),
 								})
 							}
 						}
