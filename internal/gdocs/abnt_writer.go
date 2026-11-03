@@ -89,10 +89,12 @@ func isPreTextualNote(text string) bool {
 		strings.Contains(t, "tese apresentada") ||
 		strings.Contains(t, "monografia apresentada") ||
 		strings.Contains(t, "requisito parcial para obtenção") ||
-		strings.HasPrefix(t, "orientador:") ||
-		strings.HasPrefix(t, "orientadora:") ||
-		strings.HasPrefix(t, "coorientador:") ||
-		strings.HasPrefix(t, "coorientadora:")
+		strings.Contains(t, "orientador:") ||
+		strings.Contains(t, "orientadora:") ||
+		strings.Contains(t, "coorientador:") ||
+		strings.Contains(t, "coorientadora:") ||
+		strings.HasPrefix(t, "orientador") ||
+		strings.HasPrefix(t, "coorientador")
 }
 
 // getBodyEndIndex retorna o índice final do último elemento estrutural do corpo do documento
@@ -193,15 +195,11 @@ func HealDocTextAndBlanks(ctx context.Context, documentID string, healBrokenLine
 				anoCount++
 				if anoCount == 2 {
 					targetStartIndex = el.EndIndex
+					break
 				}
 			}
 			if targetStartIndex < 0 && (trimmed == "RESUMO" || trimmed == "# RESUMO") {
 				targetStartIndex = el.StartIndex
-			}
-			if rePrimaryHeadingNum.MatchString(trimmed) || trimmed == "1 INTRODUÇÃO" {
-				if targetStartIndex < 0 {
-					targetStartIndex = el.StartIndex
-				}
 				break
 			}
 		}
@@ -732,7 +730,9 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 	}
 
 	// Assegura quebras de página estritas NBR 14724 (após Ano da Capa e após Ano da Folha de Rosto)
-	if errPbLayout := EnsurePreTextualPageBreaksAndLayout(ctx, documentID); errPbLayout == nil {
+	if errPbLayout := EnsurePreTextualPageBreaksAndLayout(ctx, documentID); errPbLayout != nil {
+		log.Printf("[ERRO] EnsurePreTextualPageBreaksAndLayout: %v", errPbLayout)
+	} else {
 		doc, err = svc.Documents.Get(documentID).Do()
 		if err != nil {
 			return "", fmt.Errorf("erro ao recarregar documento pós-layout pré-textual: %w", err)
@@ -873,11 +873,60 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 		}
 	}
 
+	// ─── ETAPA 1.7: Formatação Isolada e Canônica da Capa e Folha de Rosto (Páginas 1 e 2) ───
+	preTextualCount := 0
+	if errCoverFR := FormatABNTCoverAndTitlePageIsolated(ctx, documentID, fontFamily); errCoverFR != nil {
+		log.Printf("[AVISO] Formatação isolada de Capa/Folha de Rosto: %v", errCoverFR)
+	} else {
+		preTextualCount = 2 // Capa e Folha de Rosto formatadas com isolamento
+		doc, err = svc.Documents.Get(documentID).Do()
+		if err != nil {
+			return "", fmt.Errorf("erro ao recarregar documento pós-formatação pré-textual: %w", err)
+		}
+	}
+
+	// Carrega metadados do TCC para identificação precisa
+	metaTCC, _ := latex.ParseTCCMetadata("")
+
+	// Identifica a fronteira exata entre a Folha de Rosto e o início textual (Página 3 / RESUMO)
+	stPre := identifyPreTextualStructure(doc, metaTCC)
+	textualStartIndex := stPre.TitlePageEndIndex
+	if textualStartIndex <= 1 {
+		anoCountTextual := 0
+		for _, el := range doc.Body.Content {
+			if el.Paragraph != nil {
+				txt := ""
+				for _, pel := range el.Paragraph.Elements {
+					if pel.TextRun != nil {
+						txt += pel.TextRun.Content
+					}
+				}
+				t := strings.TrimSpace(txt)
+				if t == "2026" || (metaTCC != nil && t == strings.TrimSpace(metaTCC.Data)) {
+					anoCountTextual++
+					if anoCountTextual == 2 {
+						textualStartIndex = el.EndIndex
+						break
+					}
+				}
+				if textualStartIndex <= 1 && (t == "RESUMO" || t == "# RESUMO") {
+					textualStartIndex = el.StartIndex
+					break
+				}
+			}
+		}
+	}
+
 	bodyEnd := getBodyEndIndex(doc)
 	start := int64(1)
 	end := bodyEnd - 1
 
-	if startIndex >= 0 {
+	// Se o start_index não foi especificado manualmente (ou foi 0 ou 1),
+	// o formatador do corpo textual deve iniciar EXCLUSIVAMENTE a partir do início textual (Página 3 / RESUMO),
+	// isolando completamente a Capa e Folha de Rosto de qualquer filtro de corpo.
+	if startIndex <= 1 && textualStartIndex > 1 {
+		start = textualStartIndex
+	} else if startIndex > 1 {
 		start = startIndex
 	}
 	if endIndex > 0 && endIndex <= bodyEnd-1 {
@@ -898,14 +947,13 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 	// Contadores estatísticos para relatório
 	formattedParas := 0
 	headingsCount := 0
-	preTextualCount := 0
 	referencesCount := 0
 	captionsCount := 0
 	longQuotesCount := 0
 
 	// Máquina de estados contextual ABNT
-	beforeFirstChapter := true
-	inCoverPage := true
+	beforeFirstChapter := start < textualStartIndex
+	inCoverPage := start < textualStartIndex
 	inReferences := false
 
 	// Cor preta padrão (#000000)
@@ -924,14 +972,11 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 		}
 	}
 
-	// Carrega metadados do TCC para identificação precisa de elementos pré-textuais (Autor, Título, Ano)
-	metaTCC, _ := latex.ParseTCCMetadata("")
-
 	// ─── ETAPA 3: Formatação Estrutural ABNT Elemento a Elemento ───
 	content := doc.Body.Content
 	for _, el := range content {
-		// Elemento fora do range solicitado
-		if el.EndIndex <= start || el.StartIndex >= end {
+		// Elemento fora do range solicitado OU pertencente à Capa / Folha de Rosto (já tratada com isolamento)
+		if el.EndIndex <= start || el.StartIndex >= end || (startIndex <= 1 && el.StartIndex < textualStartIndex) {
 			continue
 		}
 
@@ -1011,6 +1056,13 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 				pEnd = end
 			}
 			if pStart >= pEnd {
+				continue
+			}
+
+			// ── PRINCÍPIO DE DONO ÚNICO (SINGLE OWNERSHIP): ELEMENTOS PRÉ-TEXTUAIS ──
+			// A Capa (Página 1) e Folha de Rosto (Página 2) são tratadas com isolamento
+			// absoluto e soberania final. O formatador geral não deve tocar nesses elementos.
+			if textualStartIndex > 1 && el.EndIndex <= textualStartIndex {
 				continue
 			}
 
@@ -1389,7 +1441,7 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 								NamedStyleType:      "NORMAL_TEXT",
 								Alignment:           "JUSTIFIED",
 								LineSpacing:         ABNTLineSpacingSingle,
-								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}}, // ABNT NBR 14724: primeira linha alinhada ao bloco de 8.0 cm
+								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}}, // ABNT NBR 14724: primeira linha alinhada ao bloco (0 pt relativo ao IndentStart de 8.0 cm)
 								IndentStart:         &docs.Dimension{Magnitude: ABNTIndentPreTextualNotePt, Unit: "PT"}, // 8.0 cm (metade da página até margem direita)
 								SpaceAbove:          &docs.Dimension{Magnitude: spAbove, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
 								SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
@@ -1421,11 +1473,11 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 							ParagraphStyle: &docs.ParagraphStyle{
 								NamedStyleType:      "NORMAL_TEXT",
 								Alignment:           "CENTER",
-								LineSpacing:         ABNTLineSpacing,
-								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
-								IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
-								SpaceAbove:          &docs.Dimension{Magnitude: 6, Unit: "PT"},
-								SpaceBelow:          &docs.Dimension{Magnitude: 6, Unit: "PT"},
+								LineSpacing:         ABNTLineSpacingSingle, // 100%
+								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								SpaceAbove:          &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
 								AvoidWidowAndOrphan: true,
 							},
 							Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
@@ -1472,11 +1524,11 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 							ParagraphStyle: &docs.ParagraphStyle{
 								NamedStyleType:      "NORMAL_TEXT",
 								Alignment:           "CENTER",
-								LineSpacing:         ABNTLineSpacing,
-								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
-								IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
-								SpaceAbove:          &docs.Dimension{Magnitude: 6, Unit: "PT"},
-								SpaceBelow:          &docs.Dimension{Magnitude: 6, Unit: "PT"},
+								LineSpacing:         ABNTLineSpacingSingle, // 100%
+								IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								SpaceAbove:          &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+								SpaceBelow:          &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
 								AvoidWidowAndOrphan: true,
 							},
 							Fields: "namedStyleType,alignment,lineSpacing,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
@@ -1648,6 +1700,17 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 	_, err = svc.Documents.BatchUpdate(documentID, updateReq).Do()
 	if err != nil {
 		return "", fmt.Errorf("erro ao formatar documento para ABNT: %w", err)
+	}
+
+	// ─── ETAPA FINAL: SOBERANIA ABSOLUTA DA CAPA E FOLHA DE ROSTO (NBR 14724 + PDF REAL) ───
+	if errPbLayout := EnsurePreTextualPageBreaksAndLayout(ctx, documentID); errPbLayout != nil {
+		log.Printf("[AVISO] EnsurePreTextualPageBreaksAndLayout final: %v", errPbLayout)
+	}
+	if errFit := FitCityYearToPageBottom(ctx, documentID, metaTCC, fontFamily); errFit != nil {
+		log.Printf("[AVISO] FitCityYearToPageBottom: %v", errFit)
+	}
+	if errCoverFR := FormatABNTCoverAndTitlePageIsolated(ctx, documentID, fontFamily); errCoverFR != nil {
+		log.Printf("[AVISO] FormatABNTCoverAndTitlePageIsolated final: %v", errCoverFR)
 	}
 
 	return fmt.Sprintf("SUCESSO: Conformidade Estrutural e Formatação ABNT aplicada com sucesso no intervalo [%d - %d]:\n"+

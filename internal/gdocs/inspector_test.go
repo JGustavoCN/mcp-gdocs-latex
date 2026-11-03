@@ -14,7 +14,7 @@ func TestElementLayoutDetailModel(t *testing.T) {
 		Alignment:          "JUSTIFIED",
 		LineSpacingPercent: 150.0,
 		IndentStartPt:      226.772,
-		IndentFirstLinePt:  226.772,
+		IndentFirstLinePt:  0.0,
 		KeepWithNext:       true,
 		AvoidWidowOrphan:   true,
 		FontSizePt:         10.0,
@@ -23,7 +23,7 @@ func TestElementLayoutDetailModel(t *testing.T) {
 		TextSnippet:        "Exemplo de preâmbulo",
 	}
 
-	if d.IndentStartPt != 226.772 || d.IndentFirstLinePt != 226.772 {
+	if d.IndentStartPt != 226.772 || d.IndentFirstLinePt != 0.0 {
 		t.Errorf("Recuo incorreto: Start=%.3f, First=%.3f", d.IndentStartPt, d.IndentFirstLinePt)
 	}
 
