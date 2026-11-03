@@ -183,10 +183,15 @@ func insertInlineImageDirect(ctx context.Context, documentID string, targetIndex
 				EndIndex:   currentOffset + 1,
 			},
 			ParagraphStyle: &docs.ParagraphStyle{
-				Alignment:      "CENTER",
-				NamedStyleType: "NORMAL_TEXT",
+				Alignment:           "CENTER",
+				NamedStyleType:      "NORMAL_TEXT",
+				IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+				IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+				SpaceAbove:          &docs.Dimension{Magnitude: 6.0, Unit: "PT"},
+				SpaceBelow:          &docs.Dimension{Magnitude: 6.0, Unit: "PT"},
+				AvoidWidowAndOrphan: true,
 			},
-			Fields: "alignment,namedStyleType",
+			Fields: "alignment,namedStyleType,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
 		},
 	})
 	currentOffset += 1

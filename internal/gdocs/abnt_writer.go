@@ -766,6 +766,21 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\arraybackslash"}, ReplaceText: ""}},
 			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\raggedright"}, ReplaceText: ""}},
 			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "@{}"}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "p{3.0cm} X X} "}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "l c X} "}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "c c c X} "}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: ">{\\raggedright\\arraybackslash}p{3.2cm} X c c@{}} "}, ReplaceText: ""}},
+
+			// Normalização e expurgo de comandos em títulos 2.3 e 2.4
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: false, Text: "2.3 \\TEXTIT{RETRIEVAL-AUGMENTED GENERATION"}, ReplaceText: "2.3 RETRIEVAL-AUGMENTED GENERATION (RAG)"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: false, Text: "2.3 \\textit{RETRIEVAL-AUGMENTED GENERATION"}, ReplaceText: "2.3 RETRIEVAL-AUGMENTED GENERATION (RAG)"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: false, Text: "2.4 \\TEXTIT{MODEL CONTEXT PROTOCOL"}, ReplaceText: "2.4 MODEL CONTEXT PROTOCOL (MCP)"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: false, Text: "2.4 \\textit{MODEL CONTEXT PROTOCOL"}, ReplaceText: "2.4 MODEL CONTEXT PROTOCOL (MCP)"}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\TEXTIT{"}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\textit{"}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\textbf{"}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "\\TEXTBF{"}, ReplaceText: ""}},
+			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "****"}, ReplaceText: ""}},
 
 			// Normalização canônica de títulos e seções ABNT NBR 6024
 			{ReplaceAllText: &docs.ReplaceAllTextRequest{ContainsText: &docs.SubstringMatchCriteria{MatchCase: true, Text: "Objetivos Objetivo Geral"}, ReplaceText: "1.4 OBJETIVOS\n\n1.4.1 Objetivo Geral"}},
@@ -937,34 +952,57 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 			}
 		}
 
-		// Limpeza de resíduos de especificador de colunas LaTeX que tenham vazado em células de tabelas nativas
+		// Limpeza cirúrgica de resíduos de especificador de colunas LaTeX que tenham vazado em células de tabelas nativas
 		var tblPurgeReqs []*docs.Request
+		reColSpecPrefix := regexp.MustCompile(`^(?:(?:[lcrpXm]|p\{[^}]+\}|>\{[^}]+\}|@\{[^}]*\})\s*)+\}\s*`)
 		for i := len(doc.Body.Content) - 1; i >= 0; i-- {
 			el := doc.Body.Content[i]
 			if el.Table != nil {
-				for _, r := range el.Table.TableRows {
-					for _, c := range r.TableCells {
-						for _, cEl := range c.Content {
+				for rowIdx := len(el.Table.TableRows) - 1; rowIdx >= 0; rowIdx-- {
+					r := el.Table.TableRows[rowIdx]
+					for cellIdx := len(r.TableCells) - 1; cellIdx >= 0; cellIdx-- {
+						c := r.TableCells[cellIdx]
+						for cElIdx := len(c.Content) - 1; cElIdx >= 0; cElIdx-- {
+							cEl := c.Content[cElIdx]
 							if cEl.Paragraph != nil {
 								cText := extractParagraphText(cEl)
-								cTrim := strings.TrimSpace(cText)
-								if cTrim != "" && (strings.Contains(cTrim, `\arraybackslash`) ||
-									strings.Contains(cTrim, `\raggedright`) ||
-									strings.Contains(cTrim, `@{}`) ||
-									strings.Contains(cTrim, `@{`) ||
-									strings.HasPrefix(cTrim, "l >{") ||
-									strings.HasPrefix(cTrim, "l c c") ||
-									strings.HasPrefix(cTrim, "l l l") ||
-									regexp.MustCompile(`>[{\\]`).MatchString(cTrim)) {
-									cpStart := cEl.StartIndex
-									cpEnd := cEl.EndIndex - 1
-									if cpEnd > cpStart {
+								cpStart := cEl.StartIndex
+								cpEnd := cEl.EndIndex - 1 // preserva quebra \n da célula
+
+								// 1. Prefixo de especificação de colunas LaTeX (ex: p{3.0cm} X X}, l c X}, c c c X})
+								if loc := reColSpecPrefix.FindStringIndex(cText); loc != nil {
+									matchLen := UTF16Length(cText[:loc[1]])
+									delEnd := cpStart + int64(matchLen)
+									if delEnd > cpEnd {
+										delEnd = cpEnd
+									}
+									if delEnd > cpStart {
 										tblPurgeReqs = append(tblPurgeReqs, &docs.Request{
 											DeleteContentRange: &docs.DeleteContentRangeRequest{
-												Range: &docs.Range{StartIndex: cpStart, EndIndex: cpEnd},
+												Range: &docs.Range{StartIndex: cpStart, EndIndex: delEnd},
 											},
 										})
 										cleanedCommandsCount++
+									}
+								} else {
+									// 2. Parágrafo que seja puramente composto por comandos residuais de alinhamento
+									cTrim := strings.TrimSpace(cText)
+									if cTrim != "" && (strings.Contains(cTrim, `\arraybackslash`) ||
+										strings.Contains(cTrim, `\raggedright`) ||
+										strings.Contains(cTrim, `@{}`) ||
+										strings.Contains(cTrim, `@{`) ||
+										strings.HasPrefix(cTrim, "l >{") ||
+										strings.HasPrefix(cTrim, "l c c") ||
+										strings.HasPrefix(cTrim, "l l l") ||
+										regexp.MustCompile(`>[{\\]`).MatchString(cTrim)) {
+										if cpEnd > cpStart {
+											tblPurgeReqs = append(tblPurgeReqs, &docs.Request{
+												DeleteContentRange: &docs.DeleteContentRangeRequest{
+													Range: &docs.Range{StartIndex: cpStart, EndIndex: cpEnd},
+												},
+											})
+											cleanedCommandsCount++
+										}
 									}
 								}
 							}
@@ -1208,41 +1246,46 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 				EndIndex:   pEnd,
 			}
 
-			// Parágrafo vazio ou exclusivo de objeto inline (ex: Logo oficial)
+			// Se contiver objeto inline (ex: Logo oficial IFS, Diagrama Mermaid, imagem PNG), centralização obrigatória ABNT
+			if hasInline {
+				spaceB := 6.0
+				if beforeFirstChapter {
+					spaceB = 14.17 // 0.5 cm abaixo da logo pré-textual
+				}
+				requests = append(requests, &docs.Request{
+					UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+						Range: pRange,
+						ParagraphStyle: &docs.ParagraphStyle{
+							NamedStyleType:      "NORMAL_TEXT",
+							Alignment:           "CENTER",
+							IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+							IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT", ForceSendFields: []string{"Magnitude"}},
+							SpaceAbove:          &docs.Dimension{Magnitude: 6.0, Unit: "PT"},
+							SpaceBelow:          &docs.Dimension{Magnitude: spaceB, Unit: "PT"},
+							AvoidWidowAndOrphan: true,
+						},
+						Fields: "namedStyleType,alignment,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
+					},
+				})
+				continue
+			}
+
+			// Parágrafo vazio sem texto e sem imagem
 			if trimmed == "" {
 				if beforeFirstChapter {
-					if hasInline {
-						// Centralização explícita da Logo oficial no topo da Capa
-						requests = append(requests, &docs.Request{
-							UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
-								Range: pRange,
-								ParagraphStyle: &docs.ParagraphStyle{
-									NamedStyleType:      "NORMAL_TEXT",
-									Alignment:           "CENTER",
-									IndentFirstLine:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
-									IndentStart:         &docs.Dimension{Magnitude: 0, Unit: "PT"},
-									SpaceAbove:          &docs.Dimension{Magnitude: 0, Unit: "PT"},
-									SpaceBelow:          &docs.Dimension{Magnitude: 14.17, Unit: "PT"}, // 0.5 cm
-									AvoidWidowAndOrphan: true,
-								},
-								Fields: "namedStyleType,alignment,indentFirstLine,indentStart,spaceAbove,spaceBelow,avoidWidowAndOrphan",
+					// Linhas em branco pré-textuais: zera recuo de 1ª linha para evitar distorção
+					requests = append(requests, &docs.Request{
+						UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+							Range: pRange,
+							ParagraphStyle: &docs.ParagraphStyle{
+								NamedStyleType:  "NORMAL_TEXT",
+								Alignment:       "CENTER",
+								IndentFirstLine: &docs.Dimension{Magnitude: 0, Unit: "PT"},
+								IndentStart:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
 							},
-						})
-					} else {
-						// Linhas em branco pré-textuais: zera recuo de 1ª linha para evitar distorção
-						requests = append(requests, &docs.Request{
-							UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
-								Range: pRange,
-								ParagraphStyle: &docs.ParagraphStyle{
-									NamedStyleType:  "NORMAL_TEXT",
-									Alignment:       "CENTER",
-									IndentFirstLine: &docs.Dimension{Magnitude: 0, Unit: "PT"},
-									IndentStart:     &docs.Dimension{Magnitude: 0, Unit: "PT"},
-								},
-								Fields: "namedStyleType,alignment,indentFirstLine,indentStart",
-							},
-						})
-					}
+							Fields: "namedStyleType,alignment,indentFirstLine,indentStart",
+						},
+					})
 				} else {
 					// Pós-início textual: qualquer parágrafo vazio residual ou delimitador técnico de tabela
 					// é sumariamente neutralizado para evitar espaçamentos verticais anômalos (como HEADING_1 herdado)
@@ -1865,15 +1908,9 @@ func FormatDocumentABNTExtended(ctx context.Context, documentID string, startInd
 		return "", fmt.Errorf("erro ao formatar documento para ABNT: %w", err)
 	}
 
-	// ─── ETAPA FINAL: SOBERANIA ABSOLUTA DA CAPA E FOLHA DE ROSTO (NBR 14724 + PDF REAL) ───
-	if errPbLayout := EnsurePreTextualPageBreaksAndLayout(ctx, documentID); errPbLayout != nil {
-		log.Printf("[AVISO] EnsurePreTextualPageBreaksAndLayout final: %v", errPbLayout)
-	}
+	// ─── ETAPA FINAL: SOBERANIA ABSOLUTA DA CAPA E FOLHA DE ROSTO (NBR 14724) ───
 	if errFit := FitCityYearToPageBottom(ctx, documentID, metaTCC, fontFamily); errFit != nil {
-		log.Printf("[AVISO] FitCityYearToPageBottom: %v", errFit)
-	}
-	if errCoverFR := FormatABNTCoverAndTitlePageIsolated(ctx, documentID, fontFamily); errCoverFR != nil {
-		log.Printf("[AVISO] FormatABNTCoverAndTitlePageIsolated final: %v", errCoverFR)
+		log.Printf("[AVISO] FitCityYearToPageBottom final: %v", errFit)
 	}
 
 	return fmt.Sprintf("SUCESSO: Conformidade Estrutural e Formatação ABNT aplicada com sucesso no intervalo [%d - %d]:\n"+
@@ -1906,13 +1943,17 @@ func ReconcileAllTCCHeadingsInDoc(ctx context.Context, svc *docs.Service, docume
 		return nil
 	}
 
-	// Mapeia títulos normalizados para a estrutura canônica
+	// Mapeia títulos normalizados e números de seção para a estrutura canônica
 	cleanMap := make(map[string]latex.KnownSectionInfo)
+	numberMap := make(map[string]latex.KnownSectionInfo)
 	for _, ks := range knownSections {
 		normTitle := normalizeTitleTextForMatch(ks.Title)
 		cleanMap[normTitle] = ks
 		normFull := normalizeTitleTextForMatch(ks.FullABNTTitle)
 		cleanMap[normFull] = ks
+		if ks.Number != "" {
+			numberMap[ks.Number] = ks
+		}
 
 		// Variações sem acrônimo / parênteses
 		if strings.Contains(normTitle, "rag") {
@@ -1925,6 +1966,8 @@ func ReconcileAllTCCHeadingsInDoc(ctx context.Context, svc *docs.Service, docume
 
 	var replaceReqs []*docs.Request
 	reMdNoise := regexp.MustCompile(`[#*]`)
+	reLatexTags := regexp.MustCompile(`(?i)\\(?:textit|textbf|texttt|text|textsc|emph|texorpdfstring)\b\{?`)
+	reSecNumPrefix := regexp.MustCompile(`^([1-9][0-9]*(?:\.[0-9]+)*)\s+`)
 	var lastProcessedTitleNorm string
 
 	for i := len(doc.Body.Content) - 1; i >= 0; i-- {
@@ -1974,11 +2017,31 @@ func ReconcileAllTCCHeadingsInDoc(ctx context.Context, svc *docs.Service, docume
 				continue // Ignora parágrafos longos de texto corrido
 			}
 
+			// Tentativa 1: Identificação pelo número de seção NBR 6024 (ex: 2.3 \TEXTIT{...})
+			cleanForNum := reLatexTags.ReplaceAllString(unmarked, "")
+			cleanForNum = strings.ReplaceAll(cleanForNum, "}", "")
+			cleanForNum = strings.TrimSpace(cleanForNum)
+
+			var matchedKS *latex.KnownSectionInfo
+			if m := reSecNumPrefix.FindStringSubmatch(cleanForNum); len(m) > 1 {
+				if ks, foundNum := numberMap[m[1]]; foundNum {
+					ksCopy := ks
+					matchedKS = &ksCopy
+				}
+			}
+
+			// Tentativa 2: Identificação por texto normalizado completo
 			norm := normalizeTitleTextForMatch(unmarked)
-			if ks, found := cleanMap[norm]; found {
+			if matchedKS == nil {
+				if ks, found := cleanMap[norm]; found {
+					ksCopy := ks
+					matchedKS = &ksCopy
+				}
+			}
+
+			if matchedKS != nil {
 				// Detecta duplicata consecutiva imediata (ex: mesmo título repetido logo abaixo)
-				if lastProcessedTitleNorm == norm {
-					// Remove o parágrafo duplicado inteiro incluindo a quebra
+				if lastProcessedTitleNorm == matchedKS.FullABNTTitle {
 					delEnd := el.EndIndex
 					if delEnd > pStart {
 						replaceReqs = append(replaceReqs, &docs.Request{
@@ -1990,10 +2053,10 @@ func ReconcileAllTCCHeadingsInDoc(ctx context.Context, svc *docs.Service, docume
 					continue
 				}
 
-				lastProcessedTitleNorm = norm
+				lastProcessedTitleNorm = matchedKS.FullABNTTitle
 
 				// Se o texto não estiver exatamente com o FullABNTTitle canônico
-				if trimmed != ks.FullABNTTitle && pEnd > pStart {
+				if trimmed != matchedKS.FullABNTTitle && pEnd > pStart {
 					replaceReqs = append(replaceReqs, &docs.Request{
 						DeleteContentRange: &docs.DeleteContentRangeRequest{
 							Range: &docs.Range{StartIndex: pStart, EndIndex: pEnd},
@@ -2002,7 +2065,7 @@ func ReconcileAllTCCHeadingsInDoc(ctx context.Context, svc *docs.Service, docume
 					replaceReqs = append(replaceReqs, &docs.Request{
 						InsertText: &docs.InsertTextRequest{
 							Location: &docs.Location{Index: pStart},
-							Text:     ks.FullABNTTitle,
+							Text:     matchedKS.FullABNTTitle,
 						},
 					})
 				}
@@ -2044,15 +2107,13 @@ func ReconcileAllTCCHeadingsInDoc(ctx context.Context, svc *docs.Service, docume
 // normalizeTitleTextForMatch normaliza o texto de um título para comparação sem case, sem acentos e sem prefixos numéricos
 func normalizeTitleTextForMatch(s string) string {
 	s = strings.ToLower(s)
-	// Remove tags markdown comuns
+	// Remove comandos LaTeX e tags markdown comuns
+	s = regexp.MustCompile(`(?i)\\(?:textit|textbf|texttt|text|textsc|emph|texorpdfstring)\b\{?`).ReplaceAllString(s, "")
 	s = strings.ReplaceAll(s, "**", "")
 	s = strings.ReplaceAll(s, "*", "")
 	s = strings.ReplaceAll(s, "#", "")
-	s = strings.ReplaceAll(s, `\textit{`, "")
-	s = strings.ReplaceAll(s, `\textbf{`, "")
-	s = strings.ReplaceAll(s, `\textit`, "")
-	s = strings.ReplaceAll(s, `\textbf`, "")
-	s = strings.ReplaceAll(s, `\texorpdfstring`, "")
+	s = strings.ReplaceAll(s, "}", "")
+	s = strings.ReplaceAll(s, "{", "")
 
 	// Remove prefixos numéricos como "1.1 ", "1.4.1 ", "3.4 ", "1 ", "capítulo 1 "
 	s = regexp.MustCompile(`^(?:cap[ií]tulo\s+)?[1-9][0-9]*(?:\.[0-9]+)*\s+`).ReplaceAllString(s, "")

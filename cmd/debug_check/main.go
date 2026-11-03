@@ -2,45 +2,35 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
 	"os"
-	"strings"
+	"path/filepath"
 
 	"github.com/JGustavoCN/mcp-gdocs-latex/internal/gdocs"
 )
 
 func main() {
-	docID := "1IVQ271HdTfXywUhDBeXTUDDcZFP-KRvNEtJvxRy8Dp8"
-	if len(os.Args) > 1 {
-		docID = os.Args[1]
-	}
-
+	credPath, _ := filepath.Abs("credentials.json")
+	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credPath)
 	ctx := context.Background()
-	svc, err := gdocs.GetDocsService(ctx)
-	if err != nil {
-		log.Fatalf("erro svc: %v", err)
+
+	docID := "1IVQ271HdTfXywUhDBeXTUDDcZFP-KRvNEtJvxRy8Dp8"
+	opts := gdocs.LintOptions{
+		CheckLatexLeaks:      true,
+		CheckSpacingAndText:  true,
+		CheckStructuralOrder: true,
 	}
 
-	doc, err := svc.Documents.Get(docID).Do()
+	report, err := gdocs.LintDocumentABNT(ctx, docID, false, false, opts)
 	if err != nil {
-		log.Fatalf("erro doc: %v", err)
+		fmt.Printf("Erro: %v\n", err)
+		return
 	}
 
-	for i, el := range doc.Body.Content {
-		if el.Paragraph != nil {
-			txt := ""
-			for _, pel := range el.Paragraph.Elements {
-				if pel.TextRun != nil {
-					txt += pel.TextRun.Content
-				}
-			}
-			trimmed := strings.TrimSpace(txt)
-			if strings.Contains(trimmed, "Trabalho de Conclusão") || strings.Contains(trimmed, "Orientador") || strings.Contains(trimmed, "LAGARTO") || strings.Contains(trimmed, "2026") {
-				b, _ := json.Marshal(el.Paragraph.ParagraphStyle)
-				fmt.Printf("[%d] Range: %d-%d | Text: %s\n  Style: %s\n", i, el.StartIndex, el.EndIndex, trimmed, string(b))
-			}
+	fmt.Printf("LatexSyntaxLeaks count: %d\n", len(report.LatexSyntaxLeaks))
+	for idx, leak := range report.LatexSyntaxLeaks {
+		if idx < 10 {
+			fmt.Printf("  [%d] Type: %s | Snippet: %q\n", idx, leak.LeakType, leak.Snippet)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf16"
 
@@ -72,6 +73,7 @@ func GetDocSkeleton(ctx context.Context, documentID string, referenceTemplateDir
 	}
 
 	var anomalies []AnomalyItem
+	var headingRecords []HeadingRecord
 
 	// 1. Mapeia títulos existentes e detecta anomalias estruturais
 	for _, el := range doc.Body.Content {
@@ -148,8 +150,33 @@ func GetDocSkeleton(ctx context.Context, documentID string, referenceTemplateDir
 					StartIndex:   el.StartIndex,
 					EndIndex:     el.EndIndex,
 				})
+
+				// Coleta para auditoria de continuidade da numeração progressiva
+				cleanForNum := regexp.MustCompile(`(?i)\\(?:textit|textbf|texttt|text|textsc|emph)\b\{?`).ReplaceAllString(trimmed, "")
+				cleanForNum = strings.ReplaceAll(cleanForNum, "}", "")
+				cleanForNum = strings.TrimSpace(cleanForNum)
+				if m := reSectionNumberExtractor.FindStringSubmatch(cleanForNum); len(m) > 1 {
+					headingRecords = append(headingRecords, HeadingRecord{
+						Text:        trimmed,
+						Number:      m[1],
+						Parts:       ParseSectionNumber(m[1]),
+						StartIndex:  el.StartIndex,
+						EndIndex:    el.EndIndex,
+						StyleName:   styleName,
+					})
+				}
 			}
 		}
+	}
+
+	// Auditoria de quebras de sequência numérica progressiva (NBR 6024)
+	headingAnomalies := AuditHeadingNumberingContinuity(headingRecords)
+	for _, ha := range headingAnomalies {
+		anomalies = append(anomalies, AnomalyItem{
+			Type:        "HEADING_SEQUENCE_BREAK",
+			Description: ha.Details,
+			Snippet:     ha.Title,
+		})
 	}
 
 	// 2. Confronto opcional com o Template / TCC de referência

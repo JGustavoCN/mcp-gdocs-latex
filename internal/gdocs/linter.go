@@ -338,6 +338,7 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 	var fontFixRanges []RangeItem
 	var fontFamilyFixRanges []RangeItem
 	var highlightRanges []RangeItem
+	var linterHeadingRecords []HeadingRecord
 
 	consecutiveEmptyParas := 0
 	consecutiveBullets := 0
@@ -383,9 +384,11 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 							if trimmedCellPara != "" {
 								cellText += pCellTxt
 
-								// Auditoria de vazamentos e resíduos LaTeX em células de tabelas
+								// Auditoria de vazamentos e resíduos LaTeX em células de tabelas (ex: p{3.0cm} X X}, l c X}, c c c X}, \arraybackslash)
 								if opts.CheckLatexLeaks {
-									if strings.Contains(trimmedCellPara, `\arraybackslash`) ||
+									reTableColSpecPrefix := regexp.MustCompile(`^(?:(?:[lcrpXm]|p\{[^}]+\}|>\{[^}]+\}|@\{[^}]*\})\s*)+\}\s*`)
+									if reTableColSpecPrefix.MatchString(trimmedCellPara) ||
+										strings.Contains(trimmedCellPara, `\arraybackslash`) ||
 										strings.Contains(trimmedCellPara, `\raggedright`) ||
 										strings.Contains(trimmedCellPara, `\raggedleft`) ||
 										strings.Contains(trimmedCellPara, `@{}`) ||
@@ -400,7 +403,7 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 											EndIndex:     cEl.EndIndex,
 											LeakType:     "Resíduo de Especificador de Coluna em Célula de Tabela",
 											Snippet:      trimmedCellPara,
-											Suggestion:   "Remover resíduos de comandos de colunas LaTeX (ex: \\arraybackslash, \\raggedright, @{}, l c c) inseridos indevidamente na célula da tabela.",
+											Suggestion:   "Remover resíduos de comandos de colunas LaTeX (ex: p{...cm} X X}, l c X}, \\arraybackslash, \\raggedright, @{}, l c c) inseridos indevidamente na célula da tabela.",
 										})
 									}
 								}
@@ -782,6 +785,27 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 						Suggestion:   "Remover prefixos '#', '##', '###' e formatar como título nativo com numeração progressiva ABNT NBR 6024.",
 					})
 				}
+
+				// Marcadores Markdown residuais no corpo do texto (**** e **)
+				if strings.Contains(pText, "****") {
+					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						LeakType:     "Marcador Markdown espúrio (****)",
+						Snippet:      "****",
+						Suggestion:   "Remover asteriscos quádruplos (****) vazados no texto.",
+					})
+				} else if strings.Contains(pText, "**") && !strings.Contains(pText, "http") {
+					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						LeakType:     "Marcadores Markdown residuais (**)",
+						Snippet:      trimmed,
+						Suggestion:   "Converter trecho com asteriscos duplos (**) para negrito nativo e remover marcadores literais.",
+					})
+				}
 			}
 
 			// 2.7 Auditoria de Espaços Duplos e Espaços Antes de Pontuação
@@ -1043,6 +1067,59 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				})
 			}
 
+			// Coleta para auditoria de numeração progressiva de títulos (NBR 6024)
+			cleanForNum := regexp.MustCompile(`(?i)\\(?:textit|textbf|texttt|text|textsc|emph)\b\{?`).ReplaceAllString(trimmed, "")
+			cleanForNum = strings.ReplaceAll(cleanForNum, "}", "")
+			cleanForNum = strings.TrimSpace(cleanForNum)
+			if m := reSectionNumberExtractor.FindStringSubmatch(cleanForNum); len(m) > 1 {
+				// Se possui estilo de heading ou se casou com padrão de título canônico
+				if isHeading || rePrimaryHeadingNum.MatchString(trimmed) || reSecondaryHeading.MatchString(trimmed) ||
+					reTertiaryHeading.MatchString(trimmed) || reQuaternaryHeading.MatchString(trimmed) {
+					linterHeadingRecords = append(linterHeadingRecords, HeadingRecord{
+						Text:         trimmed,
+						Number:       m[1],
+						Parts:        ParseSectionNumber(m[1]),
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						ElementIndex: i,
+						StyleName:    styleName,
+					})
+				} else if len(trimmed) < 120 && !strings.HasSuffix(trimmed, ".") {
+					// Parágrafo que parece título de seção com numeração mas está corrompido com comandos LaTeX ou em NORMAL_TEXT
+					if strings.Contains(trimmed, `\TEXTIT`) || strings.Contains(trimmed, `\textit`) ||
+						strings.Contains(trimmed, `\textbf`) || strings.Contains(trimmed, `\TEXTBF`) {
+						report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+							ElementIndex: i,
+							StartIndex:   el.StartIndex,
+							EndIndex:     el.EndIndex,
+							SectionTitle: trimmed,
+							Severity:     "ALERTA",
+							RuleViolated: "ABNT NBR 6024: Título de seção com comando LaTeX residual não formatado",
+							Details:      fmt.Sprintf("O parágrafo %q contém o número de seção %s mas está em NORMAL_TEXT com comandos LaTeX residuais. Execute 'format_document_abnt' para promovê-lo e reconciliar.", trimmed, m[1]),
+						})
+					}
+				}
+			}
+
+			// Auditoria de centralização obrigatória para imagens e diagramas Mermaid
+			if hasInlineObject && currentState == stateTextual {
+				pAlign := "START"
+				if p.ParagraphStyle != nil && p.ParagraphStyle.Alignment != "" {
+					pAlign = p.ParagraphStyle.Alignment
+				}
+				if pAlign != "CENTER" && !strings.Contains(trimmed, "INSTITUTO") {
+					report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						SectionTitle: "Imagem / Diagrama Não Centralizado",
+						Severity:     "ALERTA",
+						RuleViolated: "ABNT NBR 14724: Imagens, ilustrações e diagramas devem ser centralizados na página",
+						Details:      fmt.Sprintf("Elemento %d [%d-%d] contém imagem/diagrama inline mas está com alinhamento %s (esperado: CENTER).", i, el.StartIndex, el.EndIndex, pAlign),
+					})
+				}
+			}
+
 			// Parágrafo vazio ou quebra espúria
 			// ABNT NBR 14724: Espaçamentos verticais na Capa e Folha de Rosto (elementos pré-textuais)
 			// são canônicos para distribuição dos blocos. Na parte textual e pós-textual,
@@ -1090,6 +1167,19 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 					fmt.Sprintf("Elemento %d [%d-%d]: Quebra manual (\\u000b) -> %q",
 						i, el.StartIndex, el.EndIndex, snippet))
 			}
+		}
+	}
+
+	// 2.9 Auditoria de Continuidade da Numeração Progressiva de Títulos (NBR 6024)
+	if opts.CheckStructuralOrder {
+		headingSeqAnomalies := AuditHeadingNumberingContinuity(linterHeadingRecords)
+		for _, ha := range headingSeqAnomalies {
+			report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+				SectionTitle: ha.Title,
+				Severity:     "ALERTA",
+				RuleViolated: "ABNT NBR 6024: Quebra de sequência numérica nos títulos de seção",
+				Details:      ha.Details,
+			})
 		}
 	}
 

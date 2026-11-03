@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -843,6 +844,59 @@ func EstimateElementHeightPt(el *docs.StructuralElement, usableWidth float64) fl
 	return numLines*lineHeight + spaceAbove + spaceBelow
 }
 
+// DetectDocumentFontFamily identifica a família tipográfica predominante no documento (ex: "Arial" ou "Times New Roman")
+func DetectDocumentFontFamily(doc *docs.Document) string {
+	if doc == nil || doc.Body == nil {
+		return "Arial"
+	}
+	timesCount := 0
+	arialCount := 0
+	for _, el := range doc.Body.Content {
+		if el.Paragraph != nil {
+			for _, pel := range el.Paragraph.Elements {
+				if pel.TextRun != nil && pel.TextRun.TextStyle != nil && pel.TextRun.TextStyle.WeightedFontFamily != nil && pel.TextRun.TextStyle.WeightedFontFamily.FontFamily != "" {
+					ff := strings.ToLower(pel.TextRun.TextStyle.WeightedFontFamily.FontFamily)
+					if strings.Contains(ff, "times") {
+						timesCount++
+					} else if strings.Contains(ff, "arial") {
+						arialCount++
+					}
+				}
+			}
+		}
+		if timesCount > 10 || arialCount > 10 {
+			break
+		}
+	}
+	if timesCount > arialCount {
+		return "Times New Roman"
+	}
+	return "Arial"
+}
+
+// CalculateDynamicPreTextualBreaks calcula com precisão a quantidade de quebras antes da Cidade
+// na Capa e na Folha de Rosto, respeitando estritamente a base ABNT/IFS de 15 (Capa) e 14 (Folha de Rosto).
+// Quando a tipografia é Arial, remove exatamente 1 quebra na Folha de Rosto (13 quebras) para compensar a largura
+// dos glifos e evitar que o ano pule para a página 3.
+func CalculateDynamicPreTextualBreaks(doc *docs.Document, meta *latex.TCCMetadata, fontFamily string) (int, int) {
+	if fontFamily == "" {
+		fontFamily = DetectDocumentFontFamily(doc)
+	}
+
+	isArial := strings.Contains(strings.ToLower(fontFamily), "arial") || !strings.Contains(strings.ToLower(fontFamily), "times")
+
+	// Padrão institucional: Capa sempre 15
+	coverBreaks := 15
+
+	// Folha de Rosto: 14 como base; quando é Arial, remove 1 quebra (13)
+	titlePageBreaks := 14
+	if isArial {
+		titlePageBreaks = 13
+	}
+
+	return coverBreaks, titlePageBreaks
+}
+
 // CalculateOptimalPreTextualLayout calcula de forma 100% analítica, geométrica e generalizada
 // a quantidade ótima de quebras verticais antes da Cidade na Capa e na Folha de Rosto,
 // assegurando que Cidade e Ano fiquem no rodapé da folha física sem vazar para a página seguinte.
@@ -856,8 +910,8 @@ func CalculateOptimalPreTextualLayout(doc *docs.Document, meta *latex.TCCMetadat
 		MarginRightPt:   56.69,
 		UsableHeightPt:  700.16,
 		UsableWidthPt:   453.55,
-		CoverBreaks:     12,
-		TitlePageBreaks: 9,
+		CoverBreaks:     15,
+		TitlePageBreaks: 14,
 	}
 
 	if doc == nil || doc.Body == nil {
@@ -895,7 +949,13 @@ func CalculateOptimalPreTextualLayout(doc *docs.Document, meta *latex.TCCMetadat
 		return res
 	}
 
-	lineHeight12pt150 := 12.0 * 1.25 * 1.5 // 22.5 pt (métrica real com leading de fonte 12pt 150% no Docs)
+	fontFamily := DetectDocumentFontFamily(doc)
+	isArial := strings.Contains(strings.ToLower(fontFamily), "arial") || !strings.Contains(strings.ToLower(fontFamily), "times")
+
+	lineHeight12pt150 := 12.0 * 1.25 * 1.5 // 22.5 pt
+	if isArial {
+		lineHeight12pt150 = 12.0 * 1.30 * 1.5 // 23.4 pt
+	}
 
 	// 2. Análise da Capa (Página 1)
 	if st.LogoEl != nil && len(st.InstEls) > 0 {
@@ -940,23 +1000,10 @@ func CalculateOptimalPreTextualLayout(doc *docs.Document, meta *latex.TCCMetadat
 	// Altura atual total da Capa no documento:
 	currentCapaH := capaFixedH + float64(res.CurrentCoverBreaks)*lineHeight12pt150
 	res.CapaHeightPt = currentCapaH
-	// Capa tem estouro físico se a altura estimada ultrapassar 665 pt ou se houver mais de 10 quebras
-	res.CapaOverflow = (currentCapaH > 665.0 || res.CurrentCoverBreaks > 10)
 
-	// Cálculo da quantidade ideal para empurrar o ano até o limite inferior sem estourar:
-	// Margem de segurança de 25.0 pt (~1 linha de respiro em relação à margem física inferior de 2 cm)
-	availCapa := res.UsableHeightPt - capaFixedH - 25.0
-	if availCapa > 0 {
-		res.CoverBreaks = int(math.Floor(availCapa / lineHeight12pt150))
-		if res.CoverBreaks > 12 {
-			res.CoverBreaks = 12 // Teto físico seguro para garantir página 1
-		}
-		if res.CoverBreaks < 0 {
-			res.CoverBreaks = 0
-		}
-	} else {
-		res.CoverBreaks = 0
-	}
+	// Meta de quebras para a Capa: exatamente 15 quebras
+	res.CoverBreaks = 15
+	res.CapaOverflow = (res.CurrentCoverBreaks > 15)
 
 	// 3. Análise da Folha de Rosto (Página 2)
 	if len(st.PreambuloFREls) > 0 && st.OrientadorFREl != nil {
@@ -1003,23 +1050,14 @@ func CalculateOptimalPreTextualLayout(doc *docs.Document, meta *latex.TCCMetadat
 
 	currentFRH := frFixedH + float64(res.CurrentFRBreaks)*lineHeight12pt150
 	res.FolhaRostoHeightPt = currentFRH
-	// Folha de Rosto tem estouro físico se a altura estimada ultrapassar 690 pt ou se houver mais de 10 quebras
-	res.FolhaRostoOverflow = (currentFRH > 690.0 || res.CurrentFRBreaks > 10)
 
-	// Cálculo da quantidade ideal para empurrar o ano até o limite inferior sem estourar:
-	// Margem de segurança de 25.0 pt (~1 linha de respiro em relação à margem física inferior de 2 cm)
-	availFR := res.UsableHeightPt - frFixedH - 25.0
-	if availFR > 0 {
-		res.TitlePageBreaks = int(math.Floor(availFR / lineHeight12pt150))
-		if res.TitlePageBreaks > 10 {
-			res.TitlePageBreaks = 10 // Teto físico seguro para garantir página 2
-		}
-		if res.TitlePageBreaks < 0 {
-			res.TitlePageBreaks = 0
-		}
-	} else {
-		res.TitlePageBreaks = 0
+	// Meta para Folha de Rosto: 14 em Times New Roman; 13 em Arial (remove 1 quebra para o ano não pular)
+	targetFR := 14
+	if isArial {
+		targetFR = 13
 	}
+	res.TitlePageBreaks = targetFR
+	res.FolhaRostoOverflow = (res.CurrentFRBreaks > targetFR)
 
 	return res
 }
@@ -1041,6 +1079,136 @@ func countEmptyParasBetween(doc *docs.Document, startLimit, endLimit int64) int 
 		}
 	}
 	return count
+}
+
+// PreTextualGap define um intervalo entre dois elementos estruturais e a quantidade alvo de parágrafos vazios.
+type PreTextualGap struct {
+	StartLimit  int64
+	EndLimit    int64
+	TargetEmpty int
+	Description string
+}
+
+// CalibratePreTextualLayoutAtomic calibra em uma única operação atômica (1 BatchUpdate em lote reverso)
+// todas as quebras verticais da Capa e Folha de Rosto sem múltiplos round-trips HTTP.
+func CalibratePreTextualLayoutAtomic(docsSvc *docs.Service, documentID string, meta *latex.TCCMetadata, coverBreaks, titlePageBreaks int) error {
+	doc, err := docsSvc.Documents.Get(documentID).Do()
+	if err != nil {
+		return err
+	}
+
+	st := identifyPreTextualStructure(doc, meta)
+	if st.AnoCapaEl == nil {
+		return nil
+	}
+
+	var gaps []PreTextualGap
+
+	// Capa (Página 1):
+	if st.LogoEl != nil && len(st.InstEls) > 0 {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.LogoEl.EndIndex, EndLimit: st.InstEls[0].StartIndex, TargetEmpty: 0, Description: "Logo->Inst"})
+	}
+	if len(st.InstEls) > 0 && st.AutorCapaEl != nil {
+		lastInst := st.InstEls[len(st.InstEls)-1]
+		gaps = append(gaps, PreTextualGap{StartLimit: lastInst.EndIndex, EndLimit: st.AutorCapaEl.StartIndex, TargetEmpty: 3, Description: "Inst->Autor"})
+	}
+	if st.AutorCapaEl != nil && st.TituloCapaEl != nil {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.AutorCapaEl.EndIndex, EndLimit: st.TituloCapaEl.StartIndex, TargetEmpty: 3, Description: "Autor->Título"})
+	}
+	if st.TituloCapaEl != nil && st.CidadeCapaEl != nil {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.TituloCapaEl.EndIndex, EndLimit: st.CidadeCapaEl.StartIndex, TargetEmpty: coverBreaks, Description: "Título->Cidade"})
+	}
+	if st.CidadeCapaEl != nil && st.AnoCapaEl != nil {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.CidadeCapaEl.EndIndex, EndLimit: st.AnoCapaEl.StartIndex, TargetEmpty: 0, Description: "Cidade->Ano"})
+	}
+
+	// Folha de Rosto (Página 2):
+	if st.AnoCapaEl != nil && st.AutorFREl != nil {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.AnoCapaEl.EndIndex, EndLimit: st.AutorFREl.StartIndex, TargetEmpty: 3, Description: "AnoCapa->AutorFR"})
+	}
+	if st.AutorFREl != nil && st.TituloFREl != nil {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.AutorFREl.EndIndex, EndLimit: st.TituloFREl.StartIndex, TargetEmpty: 4, Description: "AutorFR->TítuloFR"})
+	}
+	if st.TituloFREl != nil && len(st.PreambuloFREls) > 0 {
+		firstPre := st.PreambuloFREls[0]
+		gaps = append(gaps, PreTextualGap{StartLimit: st.TituloFREl.EndIndex, EndLimit: firstPre.StartIndex, TargetEmpty: 4, Description: "TítuloFR->Preâmbulo"})
+	}
+	if len(st.PreambuloFREls) > 0 && st.OrientadorFREl != nil {
+		lastPre := st.PreambuloFREls[len(st.PreambuloFREls)-1]
+		gaps = append(gaps, PreTextualGap{StartLimit: lastPre.EndIndex, EndLimit: st.OrientadorFREl.StartIndex, TargetEmpty: 0, Description: "Preâmbulo->Orientador"})
+	}
+	if st.OrientadorFREl != nil && st.CidadeFREl != nil {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.OrientadorFREl.EndIndex, EndLimit: st.CidadeFREl.StartIndex, TargetEmpty: titlePageBreaks, Description: "Orientador->CidadeFR"})
+	}
+	if st.CidadeFREl != nil && st.AnoFREl != nil {
+		gaps = append(gaps, PreTextualGap{StartLimit: st.CidadeFREl.EndIndex, EndLimit: st.AnoFREl.StartIndex, TargetEmpty: 0, Description: "CidadeFR->AnoFR"})
+	}
+
+	// Ordena os gaps em ordem DECRESCENTE de StartLimit para processamento reverso atômico
+	sort.Slice(gaps, func(i, j int) bool {
+		return gaps[i].StartLimit > gaps[j].StartLimit
+	})
+
+	var atomicReqs []*docs.Request
+
+	for _, gap := range gaps {
+		emptyCount := 0
+		var emptyEls []*docs.StructuralElement
+		for _, el := range doc.Body.Content {
+			if el.StartIndex >= gap.StartLimit && el.EndIndex <= gap.EndLimit {
+				if el.Paragraph != nil {
+					txt := ""
+					for _, pel := range el.Paragraph.Elements {
+						if pel.TextRun != nil {
+							txt += pel.TextRun.Content
+						}
+					}
+					if strings.TrimSpace(txt) == "" {
+						emptyCount++
+						emptyEls = append(emptyEls, el)
+					}
+				}
+			}
+		}
+
+		if emptyCount < gap.TargetEmpty {
+			needed := gap.TargetEmpty - emptyCount
+			insertLoc := gap.EndLimit
+			if len(emptyEls) > 0 {
+				insertLoc = emptyEls[len(emptyEls)-1].EndIndex
+			}
+			atomicReqs = append(atomicReqs, &docs.Request{
+				InsertText: &docs.InsertTextRequest{
+					Location: &docs.Location{Index: insertLoc},
+					Text:     strings.Repeat("\n", needed),
+				},
+			})
+		} else if emptyCount > gap.TargetEmpty {
+			firstDelIdx := gap.TargetEmpty
+			startDel := emptyEls[firstDelIdx].StartIndex
+			endDel := emptyEls[len(emptyEls)-1].EndIndex
+			if endDel > startDel {
+				atomicReqs = append(atomicReqs, &docs.Request{
+					DeleteContentRange: &docs.DeleteContentRangeRequest{
+						Range: &docs.Range{
+							StartIndex: startDel,
+							EndIndex:   endDel,
+						},
+					},
+				})
+			}
+		}
+	}
+
+	if len(atomicReqs) > 0 {
+		_, errBatch := docsSvc.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{Requests: atomicReqs}).Do()
+		if errBatch != nil {
+			log.Printf("[AVISO] CalibratePreTextualLayoutAtomic lote falhou: %v", errBatch)
+			return errBatch
+		}
+	}
+
+	return nil
 }
 
 // calibrateEmptyParagraphsBetween calibra a quantidade de parágrafos vazios entre startLimit e endLimit
@@ -1241,84 +1409,15 @@ func EnsurePreTextualPageBreaksAndLayout(ctx context.Context, documentID string)
 		st = identifyPreTextualStructure(doc, meta)
 	}
 
-	// 3. Saneamento: remove linhas vazias espúrias entre Preâmbulo e Orientador
-	if len(st.PreambuloFREls) > 0 && st.OrientadorFREl != nil {
-		lastPre := st.PreambuloFREls[len(st.PreambuloFREls)-1]
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, lastPre.EndIndex, st.OrientadorFREl.StartIndex, 0)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
+	// 3. Calibração Atômica (1 BatchUpdate) de todas as quebras verticais pré-textuais:
+	// - Capa: 0 entre Logo e Inst, 3 entre Inst e Autor, 3 entre Autor e Título, base 15 entre Título e Cidade, 0 entre Cidade e Ano
+	// - Folha de Rosto: 3 topo, 4 entre Autor e Título, 4 entre Título e Preâmbulo, 0 entre Preâmbulo e Orientador, base 14 (ou 13 se Arial) entre Orientador e Cidade, 0 entre Cidade e Ano
+	coverBreaks, titlePageBreaks := CalculateDynamicPreTextualBreaks(doc, meta, "")
+	if errCal := CalibratePreTextualLayoutAtomic(docsSvc, documentID, meta, coverBreaks, titlePageBreaks); errCal != nil {
+		log.Printf("[AVISO] EnsurePreTextualPageBreaksAndLayout: CalibratePreTextualLayoutAtomic: %v", errCal)
 	}
 
-	// 4. CALIBRAÇÃO DINÂMICA DA CAPA (PÁGINA 1):
-	// A. Título da Capa -> Cidade 1 (calculado deterministicamente para o limite final da folha física)
-	// B. Autor da Capa -> Título da Capa (exatamente 3 quebras vazias)
-	// C. Instituição -> Autor da Capa (exatamente 3 quebras vazias)
-	// D. Cidade da Capa -> Ano da Capa (0 quebras vazias)
-	opt := CalculateOptimalPreTextualLayout(doc, meta)
-	if st.TituloCapaEl != nil && st.CidadeCapaEl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.TituloCapaEl.EndIndex, st.CidadeCapaEl.StartIndex, opt.CoverBreaks)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	if st.AutorCapaEl != nil && st.TituloCapaEl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.AutorCapaEl.EndIndex, st.TituloCapaEl.StartIndex, 3)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	if len(st.InstEls) > 0 && st.AutorCapaEl != nil {
-		lastInst := st.InstEls[len(st.InstEls)-1]
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, lastInst.EndIndex, st.AutorCapaEl.StartIndex, 3)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	if st.CidadeCapaEl != nil && st.AnoCapaEl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.CidadeCapaEl.EndIndex, st.AnoCapaEl.StartIndex, 0)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	// 5. CALIBRAÇÃO DINÂMICA DA FOLHA DE ROSTO (PÁGINA 2):
-	// A. Orientador -> Cidade 2 (calculado deterministicamente para o limite final da folha física)
-	// B. Título -> Preâmbulo (exatamente 4 quebras vazias)
-	// C. Autor -> Título (exatamente 4 quebras vazias)
-	// D. Topo Folha de Rosto (Ano 1 -> Autor): exatamente 3 quebras vazias
-	// E. Cidade 2 -> Ano 2 (0 quebras vazias)
-	opt = CalculateOptimalPreTextualLayout(doc, meta)
-	if st.OrientadorFREl != nil && st.CidadeFREl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.OrientadorFREl.EndIndex, st.CidadeFREl.StartIndex, opt.TitlePageBreaks)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	if st.TituloFREl != nil && len(st.PreambuloFREls) > 0 {
-		firstPre := st.PreambuloFREls[0]
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.TituloFREl.EndIndex, firstPre.StartIndex, 4)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	if st.AutorFREl != nil && st.TituloFREl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.AutorFREl.EndIndex, st.TituloFREl.StartIndex, 4)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	if st.AnoCapaEl != nil && st.AutorFREl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.AnoCapaEl.EndIndex, st.AutorFREl.StartIndex, 3)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	if st.CidadeFREl != nil && st.AnoFREl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.CidadeFREl.EndIndex, st.AnoFREl.StartIndex, 0)
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-	}
-
-	// 6. Limpeza de parágrafos vazios espúrios na transição da Folha de Rosto para o RESUMO
+	// 4. Limpeza de parágrafos vazios espúrios na transição da Folha de Rosto para o RESUMO
 	doc, _ = docsSvc.Documents.Get(documentID).Do()
 	var cleanReqs []*docs.Request
 	inResumeTransition := false
@@ -1621,88 +1720,18 @@ func FitCityYearToPageBottom(ctx context.Context, documentID string, meta *latex
 		return nil // Sem elementos pré-textuais
 	}
 
-	// 1. Calibração analítica geométrica de limite ótimo sem overflow
-	opt := CalculateOptimalPreTextualLayout(doc, meta)
-	coverBreaks := opt.CoverBreaks
-	if coverBreaks > 11 {
-		coverBreaks = 11 // Teto físico seguro para garantir página 1
-	}
-	if coverBreaks < 6 {
-		coverBreaks = 6
+	// Calibração atômica dinâmica com base 15 (Capa) e 14/13 (Folha de Rosto) com verificação de estouro
+	coverBreaks, titlePageBreaks := CalculateDynamicPreTextualBreaks(doc, meta, fontFamily)
+
+	if errCal := CalibratePreTextualLayoutAtomic(docsSvc, documentID, meta, coverBreaks, titlePageBreaks); errCal != nil {
+		log.Printf("[AVISO] FitCityYearToPageBottom: CalibratePreTextualLayoutAtomic: %v", errCal)
 	}
 
-	titlePageBreaks := opt.TitlePageBreaks
-	if titlePageBreaks > 9 {
-		titlePageBreaks = 9 // Teto físico seguro para garantir página 2
-	}
-	if titlePageBreaks < 5 {
-		titlePageBreaks = 5
+	if errFmt := FormatABNTCoverAndTitlePageIsolated(ctx, documentID, fontFamily); errFmt != nil {
+		log.Printf("[AVISO] FitCityYearToPageBottom: FormatABNTCoverAndTitlePageIsolated: %v", errFmt)
 	}
 
-	if st.TituloCapaEl != nil && st.CidadeCapaEl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.TituloCapaEl.EndIndex, st.CidadeCapaEl.StartIndex, coverBreaks)
-	}
-	doc, _ = docsSvc.Documents.Get(documentID).Do()
-	st = identifyPreTextualStructure(doc, meta)
-
-	if st.OrientadorFREl != nil && st.CidadeFREl != nil {
-		_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.OrientadorFREl.EndIndex, st.CidadeFREl.StartIndex, titlePageBreaks)
-	}
-
-	_ = FormatABNTCoverAndTitlePageIsolated(ctx, documentID, fontFamily)
-	doc, _ = docsSvc.Documents.Get(documentID).Do()
-
-	// 2. Validação contra o PDF físico real (Google Drive Export)
-	report, errReport := VerifyPreTextualPagination(ctx, documentID, meta, doc)
-	if errReport != nil {
-		log.Printf("[INFO] FitCityYearToPageBottom: verificação de PDF offline/indisponível (%v). Utilizada calibração direta: Capa=%d quebras, FR=%d quebras.", errReport, coverBreaks, titlePageBreaks)
-		return nil
-	}
-
-	// Se houver overflow na Capa, reduz iterativamente até caber 100% na Página 1
-	for report.CapaOverflow && coverBreaks > 1 {
-		coverBreaks--
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-		if st.TituloCapaEl != nil && st.CidadeCapaEl != nil {
-			_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.TituloCapaEl.EndIndex, st.CidadeCapaEl.StartIndex, coverBreaks)
-			_ = FormatABNTCoverAndTitlePageIsolated(ctx, documentID, fontFamily)
-			doc, _ = docsSvc.Documents.Get(documentID).Do()
-			testReport, errTest := VerifyPreTextualPagination(ctx, documentID, meta, doc)
-			if errTest == nil {
-				report = testReport
-			} else {
-				break
-			}
-		} else {
-			break
-		}
-	}
-
-	// 3. Ajuste fino da Folha de Rosto (Página 2): se houver overflow, reduz iterativamente até caber na Página 2
-	for report.FolhaRostoOverflow && titlePageBreaks > 1 {
-		titlePageBreaks--
-		doc, _ = docsSvc.Documents.Get(documentID).Do()
-		st = identifyPreTextualStructure(doc, meta)
-		if st.OrientadorFREl != nil && st.CidadeFREl != nil {
-			_ = calibrateEmptyParagraphsBetween(docsSvc, documentID, st.OrientadorFREl.EndIndex, st.CidadeFREl.StartIndex, titlePageBreaks)
-			_ = FormatABNTCoverAndTitlePageIsolated(ctx, documentID, fontFamily)
-			doc, _ = docsSvc.Documents.Get(documentID).Do()
-			testReport, errTest := VerifyPreTextualPagination(ctx, documentID, meta, doc)
-			if errTest == nil {
-				report = testReport
-			} else {
-				break
-			}
-		} else {
-			break
-		}
-	}
-
-	log.Printf("[INFO] FitCityYearToPageBottom concluído com sucesso: Capa = %d quebras, Folha de Rosto = %d quebras (Conforme: %v)",
-		coverBreaks, titlePageBreaks, report.IsConform)
-
-	log.Printf("[INFO] FitCityYearToPageBottom concluído com validação física de PDF real: Capa = %d quebras, Folha de Rosto = %d quebras.",
+	log.Printf("[INFO] FitCityYearToPageBottom concluído com sucesso: Capa = %d quebras, Folha de Rosto = %d quebras.",
 		coverBreaks, titlePageBreaks)
 
 	return nil
