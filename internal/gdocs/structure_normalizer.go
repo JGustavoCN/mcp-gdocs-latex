@@ -423,4 +423,3 @@ func ResetDocToTemplate(ctx context.Context, documentID, templateDir string, met
 
 	return fmt.Sprintf("SUCESSO: Documento %s com o Template Oficial ABNT/IFS (com Logo do IFS 3.2cm centralizada, Capa, Folha de Rosto e Capítulos NBR 14724/6024).\nID: %s\nURL: https://docs.google.com/document/d/%s/edit", action, documentID, documentID), nil
 }
-

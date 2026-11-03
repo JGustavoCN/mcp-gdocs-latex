@@ -180,4 +180,3 @@ func ParseTCCMetadata(filePath string) (*TCCMetadata, error) {
 
 	return meta, nil
 }
-

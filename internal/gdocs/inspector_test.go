@@ -45,4 +45,3 @@ func TestElementLayoutDetailModel(t *testing.T) {
 		t.Errorf("Dimensões de geometria incorretas: %+v", geom)
 	}
 }
-

@@ -300,12 +300,12 @@ func TestAdversarial_ComplexPageBreakInterleaving(t *testing.T) {
 // 4. Stress Test: Falsos títulos terminados com ':' e variações com pontuação/espaços
 func TestAdversarial_FalseTitlesWithColonAndPunctuation(t *testing.T) {
 	testCases := []struct {
-		name                 string
-		rawText              string
-		currentStyle         string
-		expectedIsHeading    bool
-		expectedLinterAlert  bool
-		description          string
+		name                string
+		rawText             string
+		currentStyle        string
+		expectedIsHeading   bool
+		expectedLinterAlert bool
+		description         string
 	}{
 		{
 			name:                "Falso título clássico terminando em ':'",

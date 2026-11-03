@@ -84,4 +84,3 @@ func TestHasABNTCoverAndLogo_Complete(t *testing.T) {
 		t.Errorf("Deveria detectar Folha de Rosto com nota institucional")
 	}
 }
-

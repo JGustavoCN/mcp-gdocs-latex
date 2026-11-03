@@ -290,4 +290,3 @@ func TestLinterSpuriousBlankLinePreservationRules(t *testing.T) {
 		})
 	}
 }
-

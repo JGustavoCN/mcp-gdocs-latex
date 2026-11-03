@@ -174,4 +174,3 @@ func UpdateLatexSectionInFile(filePath, targetTitleOrLabel, newContent string) (
 	return fmt.Sprintf("SUCESSO: Seção '%s' no arquivo '%s' atualizada com sucesso!\nBackup salvo em: %s",
 		targetTitleOrLabel, filepath.Base(filePath), backupPath), nil
 }
-

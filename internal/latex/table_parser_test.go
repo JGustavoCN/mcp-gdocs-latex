@@ -3,6 +3,7 @@ package latex
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,3 +80,34 @@ func TestParseRealTCCCaptitulosTables(t *testing.T) {
 	}
 }
 
+func TestTabularXWithNestedBracesColumnSpec(t *testing.T) {
+	sampleLatex := `\begin{table}[!htbp]
+\centering
+\caption{Regras de negócio normativas referentes a Exame de Proficiência (ROD)}
+\label{tab:rn_proficiencia}
+\begin{tabularx}{\textwidth}{@{}l >{\raggedright\arraybackslash}p{3.6cm} X c >{\raggedright\arraybackslash}p{2.8cm}@{}}
+\toprule
+\textbf{ID} & \textbf{Dispositivo} & \textbf{Regra de Negócio Derivada} & \textbf{MoSCoW} & \textbf{Integração} \\
+\midrule
+RN-08 & ROD Art. 39, I, 'a' & Requerimento restrito aos primeiros 8 dias letivos do semestre. & Must & Calendário escolar \\
+\bottomrule
+\end{tabularx}
+\fonte{Elaborado pelo autor (2026).}
+\end{table}`
+
+	tbl := ParseSingleLaTeXTable(sampleLatex)
+	if tbl.ColsCount != 5 {
+		t.Fatalf("Esperava 5 colunas, obteve %d", tbl.ColsCount)
+	}
+	if len(tbl.Headers) != 5 {
+		t.Fatalf("Esperava 5 headers, obteve %d", len(tbl.Headers))
+	}
+	if tbl.Headers[0] != "ID" {
+		t.Errorf("Header[0] deveria ser 'ID', mas obteve %q", tbl.Headers[0])
+	}
+	for i, h := range tbl.Headers {
+		if strings.Contains(h, "raggedright") || strings.Contains(h, "arraybackslash") || strings.Contains(h, "@{") {
+			t.Errorf("Header[%d] contém resquício de coluna LaTeX: %q", i, h)
+		}
+	}
+}

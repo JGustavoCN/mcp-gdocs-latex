@@ -14,7 +14,7 @@ import (
 
 const (
 	testDocID   = "1IVQ271HdTfXywUhDBeXTUDDcZFP-KRvNEtJvxRy8Dp8" // TCC Teste IA
-	targetPdfID = "1mbBbWNz-N1P4n7SYnj28i9yHCFz9PqZH"           // main.pdf no Google Drive
+	targetPdfID = "1mbBbWNz-N1P4n7SYnj28i9yHCFz9PqZH"            // main.pdf no Google Drive
 	localPdf    = "resources/tcc/main.pdf"
 )
 
@@ -92,7 +92,7 @@ func main() {
 	fmt.Println("\n--------------------------------------------------------------------")
 	fmt.Println("📌 ETAPA 5: Inserção de Tabela Nativa ABNT/IBGE (InsertNativeTable)")
 	fmt.Println("--------------------------------------------------------------------")
-	
+
 	// Obter o documento para capturar um índice de inserção seguro no final
 	svc, err := gdocs.GetDocsService(ctx)
 	if err != nil {
@@ -104,7 +104,7 @@ func main() {
 		fmt.Printf("❌ Falha ao inspecionar documento: %v\n", err)
 		return
 	}
-	
+
 	var lastContentEnd int64 = 1
 	for _, el := range doc.Body.Content {
 		if el.EndIndex > lastContentEnd {
@@ -221,4 +221,3 @@ Híbrido (RAG + MCP) & Presente (Regulamentos) & Presente (SUAP) \\
 	fmt.Println("🎉 BATERIA DE TESTES LIVE E2E CONCLUÍDA COM SUCESSO!")
 	fmt.Println("====================================================================")
 }
-

@@ -79,4 +79,3 @@ func main() {
 	fmt.Println("🎉 VALIDAÇÃO E2E CONCLUÍDA COM SUCESSO! 100% DE ADERÊNCIA AOS ARTEFATOS")
 	fmt.Println("====================================================================")
 }
-

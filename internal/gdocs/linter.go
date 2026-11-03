@@ -133,30 +133,30 @@ type MarginsConformityItem struct {
 
 // LintReport contém os resultados da análise estrutural, tipográfica e de revisões do Google Doc
 type LintReport struct {
-	TotalElements             int                      `json:"total_elements"`
-	TotalTables               int                      `json:"total_tables"`
-	EmptyTables               []string                 `json:"empty_tables,omitempty"`
-	FilledTables              []string                 `json:"filled_tables,omitempty"`
-	BoldCascades              []string                 `json:"bold_cascades,omitempty"`
-	ReviewHighlights          []ReviewHighlightItem    `json:"review_highlights,omitempty"`
-	FontSizeAnomalies         []FontSizeAnomalyItem    `json:"font_size_anomalies,omitempty"`
-	FontFamilyAnomalies       []FontFamilyAnomalyItem  `json:"font_family_anomalies,omitempty"`
-	TextColorAnomalies        []TextColorAnomalyItem   `json:"text_color_anomalies,omitempty"`
-	StructuralOrderViolations []OrderViolationItem     `json:"structural_order_violations,omitempty"`
-	MisplacedElements         []string                 `json:"misplaced_elements,omitempty"`
-	CoverStatus               string                   `json:"cover_status,omitempty"`
-	LatexSyntaxLeaks          []LatexLeakItem          `json:"latex_syntax_leaks,omitempty"`
-	DoubleSpacingAnomalies    []DoubleSpaceAnomalyItem `json:"double_spacing_anomalies,omitempty"`
+	TotalElements             int                           `json:"total_elements"`
+	TotalTables               int                           `json:"total_tables"`
+	EmptyTables               []string                      `json:"empty_tables,omitempty"`
+	FilledTables              []string                      `json:"filled_tables,omitempty"`
+	BoldCascades              []string                      `json:"bold_cascades,omitempty"`
+	ReviewHighlights          []ReviewHighlightItem         `json:"review_highlights,omitempty"`
+	FontSizeAnomalies         []FontSizeAnomalyItem         `json:"font_size_anomalies,omitempty"`
+	FontFamilyAnomalies       []FontFamilyAnomalyItem       `json:"font_family_anomalies,omitempty"`
+	TextColorAnomalies        []TextColorAnomalyItem        `json:"text_color_anomalies,omitempty"`
+	StructuralOrderViolations []OrderViolationItem          `json:"structural_order_violations,omitempty"`
+	MisplacedElements         []string                      `json:"misplaced_elements,omitempty"`
+	CoverStatus               string                        `json:"cover_status,omitempty"`
+	LatexSyntaxLeaks          []LatexLeakItem               `json:"latex_syntax_leaks,omitempty"`
+	DoubleSpacingAnomalies    []DoubleSpaceAnomalyItem      `json:"double_spacing_anomalies,omitempty"`
 	ParagraphQualityAnomalies []ParagraphQualityItem        `json:"paragraph_quality_anomalies,omitempty"`
 	BulletListAnomalies       []BulletListAnomalyItem       `json:"bullet_list_anomalies,omitempty"`
 	LineSpacingAnomalies      []LineSpacingAnomalyItem      `json:"line_spacing_anomalies,omitempty"`
 	ParagraphSpacingAnomalies []ParagraphSpacingAnomalyItem `json:"paragraph_spacing_anomalies,omitempty"`
 	MarginsConformity         *MarginsConformityItem        `json:"margins_conformity,omitempty"`
 	ConsecutiveBlankLines     []string                      `json:"consecutive_blank_lines,omitempty"`
-	SoftLineBreaks            []string                 `json:"soft_line_breaks,omitempty"`
-	DanglingMarkers           []string                 `json:"dangling_markers,omitempty"`
-	FixedAnomaliesCount       int                      `json:"fixed_anomalies_count,omitempty"`
-	Message                   string                   `json:"message"`
+	SoftLineBreaks            []string                      `json:"soft_line_breaks,omitempty"`
+	DanglingMarkers           []string                      `json:"dangling_markers,omitempty"`
+	FixedAnomaliesCount       int                           `json:"fixed_anomalies_count,omitempty"`
+	Message                   string                        `json:"message"`
 }
 
 // LintOptions configura parâmetros opcionais de auditoria e correção
@@ -382,6 +382,29 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 							trimmedCellPara := strings.TrimSpace(pCellTxt)
 							if trimmedCellPara != "" {
 								cellText += pCellTxt
+
+								// Auditoria de vazamentos e resíduos LaTeX em células de tabelas
+								if opts.CheckLatexLeaks {
+									if strings.Contains(trimmedCellPara, `\arraybackslash`) ||
+										strings.Contains(trimmedCellPara, `\raggedright`) ||
+										strings.Contains(trimmedCellPara, `\raggedleft`) ||
+										strings.Contains(trimmedCellPara, `@{}`) ||
+										strings.Contains(trimmedCellPara, `@{`) ||
+										strings.HasPrefix(trimmedCellPara, "l >{") ||
+										strings.HasPrefix(trimmedCellPara, "l c c") ||
+										strings.HasPrefix(trimmedCellPara, "l l l") ||
+										regexp.MustCompile(`>[{\\]`).MatchString(trimmedCellPara) {
+										report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+											ElementIndex: i,
+											StartIndex:   cEl.StartIndex,
+											EndIndex:     cEl.EndIndex,
+											LeakType:     "Resíduo de Especificador de Coluna em Célula de Tabela",
+											Snippet:      trimmedCellPara,
+											Suggestion:   "Remover resíduos de comandos de colunas LaTeX (ex: \\arraybackslash, \\raggedright, @{}, l c c) inseridos indevidamente na célula da tabela.",
+										})
+									}
+								}
+
 								// Auditoria de entrelinhas em células de tabelas (ABNT / IBGE exige espaçamento simples = 100%)
 								diffSpacing := pSpacing - 100.0
 								if diffSpacing < 0 {
@@ -747,6 +770,18 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 						fmt.Sprintf("Elemento %d [%d-%d]: Marcador artificial -> %q",
 							i, el.StartIndex, el.EndIndex, trimmed))
 				}
+
+				// Marcadores Markdown residuais em títulos (#, ##, ###, ####)
+				if strings.HasPrefix(trimmed, "#") {
+					report.LatexSyntaxLeaks = append(report.LatexSyntaxLeaks, LatexLeakItem{
+						ElementIndex: i,
+						StartIndex:   el.StartIndex,
+						EndIndex:     el.EndIndex,
+						LeakType:     "Marcador Markdown residual em título (#)",
+						Snippet:      trimmed,
+						Suggestion:   "Remover prefixos '#', '##', '###' e formatar como título nativo com numeração progressiva ABNT NBR 6024.",
+					})
+				}
 			}
 
 			// 2.7 Auditoria de Espaços Duplos e Espaços Antes de Pontuação
@@ -820,7 +855,10 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 					rePrimaryHeadingNoNum.MatchString(trimmed) ||
 					reSecondaryHeading.MatchString(trimmed) ||
 					reTertiaryHeading.MatchString(trimmed) ||
-					reQuaternaryHeading.MatchString(trimmed)
+					reQuaternaryHeading.MatchString(trimmed) ||
+					strings.HasPrefix(trimmed, "#") ||
+					regexp.MustCompile(`^[1-9][0-9]*(?:\.[0-9]+)*\s+`).MatchString(trimmed) ||
+					(len(trimmed) < 120 && !strings.HasSuffix(trimmed, ".") && (styleName == "HEADING_1" || styleName == "HEADING_2" || styleName == "HEADING_3" || styleName == "HEADING_4"))
 
 				isAlineaOrListItem := regexp.MustCompile(`^[a-z]\)\s+`).MatchString(trimmed) ||
 					regexp.MustCompile(`^[0-9]+[\.\)]\s+`).MatchString(trimmed) ||
@@ -830,7 +868,9 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				isFormulaOrMath := strings.HasPrefix(trimmed, "H₀:") || strings.HasPrefix(trimmed, "H₁:") ||
 					strings.HasPrefix(trimmed, "H0:") || strings.HasPrefix(trimmed, "H1:") ||
 					strings.HasPrefix(trimmed, "TCD_") || strings.Contains(trimmed, " = ") ||
-					strings.Contains(trimmed, " > ") || strings.Contains(trimmed, " < ")
+					strings.Contains(trimmed, " > ") || strings.Contains(trimmed, " < ") ||
+					strings.HasPrefix(trimmed, "`") || strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") ||
+					strings.HasPrefix(trimmed, "GET ") || strings.HasPrefix(trimmed, "POST ") || strings.HasPrefix(trimmed, "PUT ") || strings.HasPrefix(trimmed, "DELETE ")
 
 				isListOrTableIntro := strings.HasSuffix(trimmed, ":") ||
 					strings.HasPrefix(trimmed, "A Tabela ") || strings.HasPrefix(trimmed, "O Quadro ") || strings.HasPrefix(trimmed, "A Figura ")
@@ -901,6 +941,9 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 					reSecondaryHeading.MatchString(trimmed) ||
 					reTertiaryHeading.MatchString(trimmed) ||
 					reQuaternaryHeading.MatchString(trimmed) ||
+					strings.HasPrefix(trimmed, "#") ||
+					regexp.MustCompile(`^[1-9][0-9]*(?:\.[0-9]+)*\s+`).MatchString(trimmed) ||
+					(len(trimmed) < 120 && !strings.HasSuffix(trimmed, ".") && (styleName == "HEADING_1" || styleName == "HEADING_2" || styleName == "HEADING_3" || styleName == "HEADING_4")) ||
 					trimmed == "REFERÊNCIAS" || strings.HasPrefix(trimmed, "REFERÊNCIAS")
 
 				expectedSpacing := float64(150.0)
@@ -1051,9 +1094,9 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 	}
 
 	// 2.10 Auditoria da Capa Oficial IFS e Folha de Rosto (NBR 14724 + config.tex)
+	var coverIssues []string
 	if opts.CheckStructuralOrder {
 		hasCover, hasLogo, hasTitlePage := HasABNTCoverAndLogo(doc)
-		var coverIssues []string
 
 		if !hasCover {
 			coverIssues = append(coverIssues, "Capa institucional com dados de identificação ausente")
@@ -1115,7 +1158,31 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				})
 			}
 
-			// 3. Quebras verticais regulamentares da Capa (NBR 14724 + checklist IFS)
+			// 3. Auditoria Geométrica e Quebras Verticais da Capa (NBR 14724 + checklist IFS)
+			opt := CalculateOptimalPreTextualLayout(doc, meta)
+
+			if opt.EmptyBetweenLogoInst > 0 {
+				coverIssues = append(coverIssues, fmt.Sprintf("Capa: detectadas %d linhas vazias entre Logo e Instituição (esperado: 0 / contíguo)", opt.EmptyBetweenLogoInst))
+				report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+					SectionTitle: "Capa (Logo -> Instituição)",
+					Severity:     "ALERTA",
+					RuleViolated: "ABNT NBR 14724 / IFS: Não deve haver quebras de linhas vazias entre o logotipo e o nome da instituição",
+					Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para eliminar.", opt.EmptyBetweenLogoInst),
+				})
+			}
+
+			if opt.CapaOverflow {
+				coverIssues = append(coverIssues, fmt.Sprintf("Estouro na Capa: altura estimada (%.1f pt) excede o limite físico útil da folha A4 (%.1f pt), empurrando Cidade/Ano para a página 2 (atualmente: %d quebras; ideal: %d quebras)", opt.CapaHeightPt, opt.UsableHeightPt, opt.CurrentCoverBreaks, opt.CoverBreaks))
+				report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+					SectionTitle: "Capa (Estouro de Página Física)",
+					Severity:     "ALERTA",
+					RuleViolated: "ABNT NBR 14724: Todos os elementos da Capa devem ocupar estritamente a Página 1 sem vazar para a página seguinte",
+					Details:      fmt.Sprintf("Atualmente existem %d quebras entre Título e Cidade. Execute 'format_document_abnt' para calibrar para %d.", opt.CurrentCoverBreaks, opt.CoverBreaks),
+				})
+			} else if opt.CoverBreaks > 0 && opt.CurrentCoverBreaks < opt.CoverBreaks-2 {
+				coverIssues = append(coverIssues, fmt.Sprintf("Capa: Cidade/Ano não estão posicionados no limite inferior da folha (atualmente: %d quebras; ideal: %d quebras)", opt.CurrentCoverBreaks, opt.CoverBreaks))
+			}
+
 			if len(st.InstEls) > 0 && st.AutorCapaEl != nil {
 				lastInst := st.InstEls[len(st.InstEls)-1]
 				emptyIA := countEmptyParasBetween(doc, lastInst.EndIndex, st.AutorCapaEl.StartIndex)
@@ -1147,21 +1214,6 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				}
 			}
 
-			if st.TituloCapaEl != nil && st.CidadeCapaEl != nil {
-				emptyTCCapa := countEmptyParasBetween(doc, st.TituloCapaEl.EndIndex, st.CidadeCapaEl.StartIndex)
-				if emptyTCCapa < 12 || emptyTCCapa > 17 {
-					coverIssues = append(coverIssues, fmt.Sprintf("Capa: espaçamento entre Título e Cidade irregular (%d quebras; esperado: 14 para rodapé sem overflow)", emptyTCCapa))
-					report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
-						StartIndex:   st.TituloCapaEl.StartIndex,
-						EndIndex:     st.CidadeCapaEl.EndIndex,
-						SectionTitle: "Capa (Espaçamento Título -> Cidade)",
-						Severity:     "ALERTA",
-						RuleViolated: "ABNT NBR 14724: Devem existir cerca de 14 quebras de linhas para posicionar Cidade e Ano no rodapé da Capa sem provocar estouro de página",
-						Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para calibrar para 14.", emptyTCCapa),
-					})
-				}
-			}
-
 			// 4. Quebra de Página da Folha de Rosto (Ano 2)
 			if st.AnoFREl != nil && !st.AnoFRHasBreak {
 				coverIssues = append(coverIssues, "Ausência de Quebra de Página obrigatória (NBR 14724) após o Ano da Folha de Rosto")
@@ -1175,7 +1227,29 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 				})
 			}
 
-			// 5. Quebras verticais regulamentares da Folha de Rosto (Página 2):
+			// 5. Quebras verticais e Paginação da Folha de Rosto (Página 2):
+			if opt.EmptyBetweenPreOrient > 0 {
+				coverIssues = append(coverIssues, fmt.Sprintf("Folha de Rosto: existem %d quebras vazias entre o Preâmbulo e o Orientador (esperado: 0 / bloco contíguo)", opt.EmptyBetweenPreOrient))
+				report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+					SectionTitle: "Folha de Rosto (Preâmbulo -> Orientador)",
+					Severity:     "ALERTA",
+					RuleViolated: "ABNT NBR 14724: O Orientador deve ser contíguo à Nota de Apresentação (0 linhas vazias, com spaceAbove 0.5cm)",
+					Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para unificar o bloco.", opt.EmptyBetweenPreOrient),
+				})
+			}
+
+			if opt.FolhaRostoOverflow {
+				coverIssues = append(coverIssues, fmt.Sprintf("Estouro na Folha de Rosto: altura estimada (%.1f pt) excede a folha A4 útil (%.1f pt), empurrando Cidade/Ano para a página seguinte (atualmente: %d quebras; ideal: %d quebras)", opt.FolhaRostoHeightPt, opt.UsableHeightPt, opt.CurrentFRBreaks, opt.TitlePageBreaks))
+				report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
+					SectionTitle: "Folha de Rosto (Estouro de Página Física)",
+					Severity:     "ALERTA",
+					RuleViolated: "ABNT NBR 14724: Todos os elementos da Folha de Rosto devem ocupar estritamente a Página 2 sem vazar para a página seguinte",
+					Details:      fmt.Sprintf("Atualmente existem %d quebras entre Orientador e Cidade. Execute 'format_document_abnt' para calibrar para %d.", opt.CurrentFRBreaks, opt.TitlePageBreaks),
+				})
+			} else if opt.TitlePageBreaks > 0 && opt.CurrentFRBreaks < opt.TitlePageBreaks-2 {
+				coverIssues = append(coverIssues, fmt.Sprintf("Folha de Rosto: Cidade/Ano não estão posicionados no limite inferior da folha (atualmente: %d quebras; ideal: %d quebras)", opt.CurrentFRBreaks, opt.TitlePageBreaks))
+			}
+
 			if st.AnoCapaEl != nil && st.AutorFREl != nil {
 				emptyTopFR := countEmptyParasBetween(doc, st.AnoCapaEl.EndIndex, st.AutorFREl.StartIndex)
 				if emptyTopFR < 2 || emptyTopFR > 5 {
@@ -1218,37 +1292,6 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 						Severity:     "ALERTA",
 						RuleViolated: "ABNT NBR 14724: Devem existir cerca de 4 quebras de linhas entre o Título e a Nota de Apresentação / Preâmbulo",
 						Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para calibrar para 4.", emptyTP),
-					})
-				}
-			}
-
-			if len(st.PreambuloFREls) > 0 && st.OrientadorFREl != nil {
-				lastPre := st.PreambuloFREls[len(st.PreambuloFREls)-1]
-				emptyPO := countEmptyParasBetween(doc, lastPre.EndIndex, st.OrientadorFREl.StartIndex)
-				if emptyPO > 0 {
-					coverIssues = append(coverIssues, fmt.Sprintf("Folha de Rosto: existem %d quebras vazias entre o Preâmbulo e o Orientador (esperado: 0 / bloco contíguo)", emptyPO))
-					report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
-						StartIndex:   lastPre.EndIndex,
-						EndIndex:     st.OrientadorFREl.StartIndex,
-						SectionTitle: "Folha de Rosto (Preâmbulo -> Orientador)",
-						Severity:     "ALERTA",
-						RuleViolated: "ABNT NBR 14724: O Orientador deve ser contíguo à Nota de Apresentação (0 linhas vazias, com spaceAbove 0.5cm)",
-						Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para unificar o bloco.", emptyPO),
-					})
-				}
-			}
-
-			if st.OrientadorFREl != nil && st.CidadeFREl != nil {
-				emptyOC := countEmptyParasBetween(doc, st.OrientadorFREl.EndIndex, st.CidadeFREl.StartIndex)
-				if emptyOC < 9 || emptyOC > 14 {
-					coverIssues = append(coverIssues, fmt.Sprintf("Folha de Rosto: espaçamento entre Orientador e Cidade irregular (%d quebras; esperado: 11 para rodapé sem overflow)", emptyOC))
-					report.StructuralOrderViolations = append(report.StructuralOrderViolations, OrderViolationItem{
-						StartIndex:   st.OrientadorFREl.StartIndex,
-						EndIndex:     st.CidadeFREl.EndIndex,
-						SectionTitle: "Folha de Rosto (Espaçamento Orientador -> Cidade)",
-						Severity:     "ALERTA",
-						RuleViolated: "ABNT NBR 14724: Devem existir cerca de 11 quebras de linhas para posicionar Cidade e Ano no rodapé da Folha de Rosto sem estouro",
-						Details:      fmt.Sprintf("Atualmente existem %d quebras vazias. Execute 'format_document_abnt' para calibrar para 11.", emptyOC),
 					})
 				}
 			}
@@ -1473,6 +1516,14 @@ func LintDocumentABNT(ctx context.Context, documentID string, autoFix bool, clea
 			batchReq := &docs.BatchUpdateDocumentRequest{Requests: requests}
 			if _, errBatch := docsSvc.Documents.BatchUpdate(documentID, batchReq).Do(); errBatch == nil {
 				fixedCount += len(requests)
+			}
+		}
+
+		// 3.8 Correção de paginação e layout pré-textual (Capa e Folha de Rosto)
+		if len(coverIssues) > 0 {
+			if errPb := EnsurePreTextualPageBreaksAndLayout(ctx, documentID); errPb == nil {
+				_ = FormatABNTCoverAndTitlePageIsolated(ctx, documentID, "")
+				fixedCount++
 			}
 		}
 

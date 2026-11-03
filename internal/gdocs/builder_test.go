@@ -1,8 +1,8 @@
 package gdocs
 
 import (
-	"testing"
 	"google.golang.org/api/docs/v1"
+	"testing"
 )
 
 func TestClampRange(t *testing.T) {
@@ -55,4 +55,3 @@ func TestBuildABNTReplaceSequence(t *testing.T) {
 		}
 	})
 }
-

@@ -114,14 +114,22 @@ func ParseLatexFileStructure(filePath string) ([]LatexElement, error) {
 
 		// Títulos hierárquicos
 		var el *LatexElement
-		if m := regexChapterCmd.FindStringSubmatch(line); len(m) > 1 {
-			el = &LatexElement{Type: ElementChapter, Title: CleanLaTeXText(m[1]), File: filepath.Base(filePath), StartLine: lineNum}
-		} else if m := regexSectionCmd.FindStringSubmatch(line); len(m) > 1 {
-			el = &LatexElement{Type: ElementSection, Title: CleanLaTeXText(m[1]), File: filepath.Base(filePath), StartLine: lineNum}
-		} else if m := regexSubsectionCmd.FindStringSubmatch(line); len(m) > 1 {
-			el = &LatexElement{Type: ElementSubsection, Title: CleanLaTeXText(m[1]), File: filepath.Base(filePath), StartLine: lineNum}
-		} else if m := regexSubsubsectionCmd.FindStringSubmatch(line); len(m) > 1 {
-			el = &LatexElement{Type: ElementSubsubsection, Title: CleanLaTeXText(m[1]), File: filepath.Base(filePath), StartLine: lineNum}
+		if strings.HasPrefix(line, `\chapter`) {
+			if title := extractCommandArgument(line, `\chapter`); title != "" {
+				el = &LatexElement{Type: ElementChapter, Title: CleanLaTeXText(title), File: filepath.Base(filePath), StartLine: lineNum}
+			}
+		} else if strings.HasPrefix(line, `\section`) {
+			if title := extractCommandArgument(line, `\section`); title != "" {
+				el = &LatexElement{Type: ElementSection, Title: CleanLaTeXText(title), File: filepath.Base(filePath), StartLine: lineNum}
+			}
+		} else if strings.HasPrefix(line, `\subsection`) {
+			if title := extractCommandArgument(line, `\subsection`); title != "" {
+				el = &LatexElement{Type: ElementSubsection, Title: CleanLaTeXText(title), File: filepath.Base(filePath), StartLine: lineNum}
+			}
+		} else if strings.HasPrefix(line, `\subsubsection`) {
+			if title := extractCommandArgument(line, `\subsubsection`); title != "" {
+				el = &LatexElement{Type: ElementSubsubsection, Title: CleanLaTeXText(title), File: filepath.Base(filePath), StartLine: lineNum}
+			}
 		}
 
 		if el != nil {
@@ -172,11 +180,11 @@ func ScanTCCStructure(tccBaseDir string) ([]LatexElement, error) {
 
 // KnownSectionInfo detalha uma seção mapeada do TCC com numeração ABNT e nível hierárquico
 type KnownSectionInfo struct {
-	Level         int                   `json:"level"`          // 1 (Chapter), 2 (Section), 3 (Subsection), 4 (Subsubsection)
-	TargetHeading string                `json:"target_heading"` // HEADING_1, HEADING_2, HEADING_3, HEADING_4
-	Number        string                `json:"number"`         // "1", "1.1", "1.4.1"
-	Title         string                `json:"title"`          // "Contextualização"
-	FullABNTTitle string                `json:"full_abnt_title"`// "1.1 CONTEXTUALIZAÇÃO" ou "1.4.1 Objetivo Geral"
+	Level         int                   `json:"level"`           // 1 (Chapter), 2 (Section), 3 (Subsection), 4 (Subsubsection)
+	TargetHeading string                `json:"target_heading"`  // HEADING_1, HEADING_2, HEADING_3, HEADING_4
+	Number        string                `json:"number"`          // "1", "1.1", "1.4.1"
+	Title         string                `json:"title"`           // "Contextualização"
+	FullABNTTitle string                `json:"full_abnt_title"` // "1.1 CONTEXTUALIZAÇÃO" ou "1.4.1 Objetivo Geral"
 	Type          StructuralElementType `json:"type"`
 	File          string                `json:"file"`
 }
@@ -254,4 +262,32 @@ func GetNumberedTCCStructure(tccBaseDir string) ([]KnownSectionInfo, error) {
 	}
 
 	return result, nil
+}
+
+// extractCommandArgument extrai o conteúdo do argumento principal de um comando LaTeX
+// respeitando o balanceamento de chaves aninhadas (ex: \section{\textit{RAG} (Guia)}).
+func extractCommandArgument(line, cmd string) string {
+	idx := strings.Index(line, cmd)
+	if idx == -1 {
+		return ""
+	}
+	rem := line[idx+len(cmd):]
+	rem = strings.TrimLeft(rem, "*")
+	rem = strings.TrimSpace(rem)
+	if !strings.HasPrefix(rem, "{") {
+		return ""
+	}
+	depth := 0
+	start := 1
+	for i := 0; i < len(rem); i++ {
+		if rem[i] == '{' {
+			depth++
+		} else if rem[i] == '}' {
+			depth--
+			if depth == 0 {
+				return rem[start:i]
+			}
+		}
+	}
+	return ""
 }

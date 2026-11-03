@@ -49,4 +49,3 @@ func TestCalculateLocalPDFMD5_CorruptedNoEOF(t *testing.T) {
 		t.Errorf("Mensagem de erro esperada mencionando %%%%EOF, obteve: %v", err)
 	}
 }
-

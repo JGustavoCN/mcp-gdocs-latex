@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/JGustavoCN/mcp-gdocs-latex/internal/latex"
 )
 
 // ElementLayoutDetail descreve em detalhes a geometria e os estilos de um elemento do documento
@@ -39,16 +41,16 @@ type ElementLayoutDetail struct {
 
 // DocumentGeometryDetail armazena as dimensões da página e margens
 type DocumentGeometryDetail struct {
-	PageWidthPt       float64 `json:"page_width_pt"`
-	PageHeightPt      float64 `json:"page_height_pt"`
-	MarginTopPt       float64 `json:"margin_top_pt"`
-	MarginTopCm       float64 `json:"margin_top_cm"`
-	MarginLeftPt      float64 `json:"margin_left_pt"`
-	MarginLeftCm      float64 `json:"margin_left_cm"`
-	MarginBottomPt    float64 `json:"margin_bottom_pt"`
-	MarginBottomCm    float64 `json:"margin_bottom_cm"`
-	MarginRightPt     float64 `json:"margin_right_pt"`
-	MarginRightCm     float64 `json:"margin_right_cm"`
+	PageWidthPt        float64 `json:"page_width_pt"`
+	PageHeightPt       float64 `json:"page_height_pt"`
+	MarginTopPt        float64 `json:"margin_top_pt"`
+	MarginTopCm        float64 `json:"margin_top_cm"`
+	MarginLeftPt       float64 `json:"margin_left_pt"`
+	MarginLeftCm       float64 `json:"margin_left_cm"`
+	MarginBottomPt     float64 `json:"margin_bottom_pt"`
+	MarginBottomCm     float64 `json:"margin_bottom_cm"`
+	MarginRightPt      float64 `json:"margin_right_pt"`
+	MarginRightCm      float64 `json:"margin_right_cm"`
 	UsablePageHeightPt float64 `json:"usable_page_height_pt"`
 }
 
@@ -64,14 +66,15 @@ type SectionLayoutDetail struct {
 
 // InspectLayoutReport consolida o Raio-X geométrico e estrutural dos elementos do Google Docs
 type InspectLayoutReport struct {
-	DocumentID       string                  `json:"document_id"`
-	DocumentTitle    string                  `json:"document_title"`
-	TotalElements    int                     `json:"total_elements"`
-	StartIndex       int64                   `json:"filter_start_index"`
-	EndIndex         int64                   `json:"filter_end_index"`
-	DocumentGeometry *DocumentGeometryDetail `json:"document_geometry,omitempty"`
-	Sections         []SectionLayoutDetail   `json:"sections,omitempty"`
-	Elements         []ElementLayoutDetail   `json:"elements"`
+	DocumentID           string                        `json:"document_id"`
+	DocumentTitle        string                        `json:"document_title"`
+	TotalElements        int                           `json:"total_elements"`
+	StartIndex           int64                         `json:"filter_start_index"`
+	EndIndex             int64                         `json:"filter_end_index"`
+	DocumentGeometry     *DocumentGeometryDetail       `json:"document_geometry,omitempty"`
+	PreTextualPagination *PreTextualOptimizationResult `json:"pre_textual_pagination,omitempty"`
+	Sections             []SectionLayoutDetail         `json:"sections,omitempty"`
+	Elements             []ElementLayoutDetail         `json:"elements"`
 }
 
 // InspectDocLayout inspeciona as propriedades de baixo nível (recuos, alinhamento, quebras de página, tabelas e páginas físicas)
@@ -95,6 +98,10 @@ func InspectDocLayout(ctx context.Context, documentID string, startIndex, endInd
 		Sections:      []SectionLayoutDetail{},
 		Elements:      []ElementLayoutDetail{},
 	}
+
+	meta, _ := latex.ParseTCCMetadata("")
+	optPre := CalculateOptimalPreTextualLayout(doc, meta)
+	report.PreTextualPagination = &optPre
 
 	const ptToCm = 2.54 / 72.0
 	usableHeight := 700.16 // Altura padrão A4 (841.89 - 85.04 - 56.69)

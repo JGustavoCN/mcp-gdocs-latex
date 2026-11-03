@@ -42,4 +42,3 @@ func TestParseTCCMetadata_RealFile(t *testing.T) {
 		t.Errorf("Esperava pelo menos 3 linhas na instituição, obteve %d: %v", len(lines), lines)
 	}
 }
-

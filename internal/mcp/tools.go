@@ -481,7 +481,7 @@ func handleApplyTextStyle(ctx context.Context, request mcplib.CallToolRequest) (
 	if err != nil {
 		return mcplib.NewToolResultError("Parâmetro 'document_url_or_id' é obrigatório."), nil
 	}
-	
+
 	startIndex := request.GetInt("start_index", -1)
 	endIndex := request.GetInt("end_index", -1)
 	if startIndex < 0 || endIndex < 0 || startIndex >= endIndex {
@@ -1337,4 +1337,3 @@ func handleInspectDocLayout(ctx context.Context, request mcplib.CallToolRequest)
 
 	return mcplib.NewToolResultText(string(outJSON)), nil
 }
-

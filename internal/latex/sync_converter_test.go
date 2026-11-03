@@ -123,3 +123,14 @@ Texto da justificativa intacto.
 	}
 }
 
+func TestGetNumberedTCCStructure(t *testing.T) {
+	tccDir := filepath.Join("..", "..", "resources", "tcc")
+	known, err := GetNumberedTCCStructure(tccDir)
+	if err != nil {
+		t.Fatalf("Erro: %v", err)
+	}
+	t.Logf("Total de seções numeradas: %d", len(known))
+	for _, k := range known {
+		t.Logf("Level %d | %s | %s", k.Level, k.TargetHeading, k.FullABNTTitle)
+	}
+}

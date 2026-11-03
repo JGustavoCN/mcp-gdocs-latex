@@ -14,17 +14,17 @@ import (
 
 // PreTextualPaginationReport detalha a auditoria física real das páginas extraídas do PDF renderizado pelo Google Docs.
 type PreTextualPaginationReport struct {
-	IsConform           bool     `json:"is_conform"`
-	TotalPDFPages       int      `json:"total_pdf_pages"`
-	CapaPage            int      `json:"capa_page"`
-	CapaAnoPage         int      `json:"capa_ano_page"`
-	FolhaRostoPage      int      `json:"folha_rosto_page"`
-	FolhaRostoAnoPage   int      `json:"folha_rosto_ano_page"`
-	ResumoPage          int      `json:"resumo_page"`
-	CapaOverflow        bool     `json:"capa_overflow"`
-	FolhaRostoOverflow  bool     `json:"folha_rosto_overflow"`
-	ResumoPremature     bool     `json:"resumo_premature"`
-	Details             []string `json:"details"`
+	IsConform          bool     `json:"is_conform"`
+	TotalPDFPages      int      `json:"total_pdf_pages"`
+	CapaPage           int      `json:"capa_page"`
+	CapaAnoPage        int      `json:"capa_ano_page"`
+	FolhaRostoPage     int      `json:"folha_rosto_page"`
+	FolhaRostoAnoPage  int      `json:"folha_rosto_ano_page"`
+	ResumoPage         int      `json:"resumo_page"`
+	CapaOverflow       bool     `json:"capa_overflow"`
+	FolhaRostoOverflow bool     `json:"folha_rosto_overflow"`
+	ResumoPremature    bool     `json:"resumo_premature"`
+	Details            []string `json:"details"`
 }
 
 // ExportDocPDF exporta o documento Google Docs como PDF binário oficial renderizado pelo motor do Google Drive.
@@ -125,24 +125,40 @@ func VerifyPreTextualPagination(ctx context.Context, docID string, meta *latex.T
 		autorText = strings.TrimSpace(meta.Autor)
 	}
 
-	// 1. Rastreia em quais páginas ocorrem o ano e o autor
+	// 1. Rastreia em quais páginas ocorrem a cidade, o ano e o autor
 	type matchLoc struct {
 		page int
 	}
 
 	var anoMatches []matchLoc
+	var cidadeMatches []matchLoc
 	var autorMatches []matchLoc
 	resumoPage := 0
 
 	for pageNum := 1; pageNum <= len(pages); pageNum++ {
 		pageTxt := pages[pageNum-1]
 		upperTxt := strings.ToUpper(pageTxt)
+		normalizedNoSpace := strings.ReplaceAll(upperTxt, " ", "")
 
-		if anoText != "" && strings.Contains(pageTxt, anoText) {
-			anoMatches = append(anoMatches, matchLoc{page: pageNum})
+		if anoText != "" {
+			anoNoSpace := strings.ReplaceAll(anoText, " ", "")
+			if strings.Contains(pageTxt, anoText) || strings.Contains(normalizedNoSpace, anoNoSpace) {
+				anoMatches = append(anoMatches, matchLoc{page: pageNum})
+			}
 		}
-		if autorText != "" && strings.Contains(upperTxt, strings.ToUpper(autorText)) {
-			autorMatches = append(autorMatches, matchLoc{page: pageNum})
+		if cidadeText != "" {
+			cidadeUpper := strings.ToUpper(cidadeText)
+			cidadeNoSpace := strings.ReplaceAll(cidadeUpper, " ", "")
+			if strings.Contains(upperTxt, cidadeUpper) || strings.Contains(normalizedNoSpace, cidadeNoSpace) {
+				cidadeMatches = append(cidadeMatches, matchLoc{page: pageNum})
+			}
+		}
+		if autorText != "" {
+			autorUpper := strings.ToUpper(autorText)
+			autorNoSpace := strings.ReplaceAll(autorUpper, " ", "")
+			if strings.Contains(upperTxt, autorUpper) || strings.Contains(normalizedNoSpace, autorNoSpace) {
+				autorMatches = append(autorMatches, matchLoc{page: pageNum})
+			}
 		}
 		if resumoPage == 0 && (strings.Contains(upperTxt, "RESUMO") || strings.Contains(upperTxt, "ABSTRACT")) {
 			// Garante que não é uma citação acidental na capa
@@ -156,11 +172,14 @@ func VerifyPreTextualPagination(ctx context.Context, docID string, meta *latex.T
 	report.CapaPage = 1
 	if len(anoMatches) >= 1 {
 		report.CapaAnoPage = anoMatches[0].page
+	} else if len(cidadeMatches) >= 1 {
+		report.CapaAnoPage = cidadeMatches[0].page
 	}
+
 	if report.CapaAnoPage > 1 {
 		report.CapaOverflow = true
 		report.IsConform = false
-		report.Details = append(report.Details, fmt.Sprintf("Estouro na Capa: o Ano (%s) vazou para a Página %d (esperado: Página 1)", anoText, report.CapaAnoPage))
+		report.Details = append(report.Details, fmt.Sprintf("Estouro na Capa: o Ano/Cidade (%s) vazou para a Página %d (esperado: Página 1)", anoText, report.CapaAnoPage))
 	}
 
 	// Avalia a Folha de Rosto
@@ -171,12 +190,14 @@ func VerifyPreTextualPagination(ctx context.Context, docID string, meta *latex.T
 	}
 	if len(anoMatches) >= 2 {
 		report.FolhaRostoAnoPage = anoMatches[1].page
+	} else if len(cidadeMatches) >= 2 {
+		report.FolhaRostoAnoPage = cidadeMatches[1].page
 	}
 
 	if report.FolhaRostoAnoPage > 2 {
 		report.FolhaRostoOverflow = true
 		report.IsConform = false
-		report.Details = append(report.Details, fmt.Sprintf("Estouro na Folha de Rosto: o Ano (%s) vazou para a Página %d (esperado: Página 2)", anoText, report.FolhaRostoAnoPage))
+		report.Details = append(report.Details, fmt.Sprintf("Estouro na Folha de Rosto: o Ano/Cidade (%s) vazou para a Página %d (esperado: Página 2)", anoText, report.FolhaRostoAnoPage))
 	}
 
 	// Avalia o RESUMO
@@ -195,4 +216,3 @@ func VerifyPreTextualPagination(ctx context.Context, docID string, meta *latex.T
 
 	return report, nil
 }
-

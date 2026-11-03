@@ -10,12 +10,12 @@ import (
 
 func TestShouldMergeParagraphs(t *testing.T) {
 	tests := []struct {
-		name        string
-		curr        string
-		next        string
-		isSpecial1  bool
-		isSpecial2  bool
-		expected    bool
+		name       string
+		curr       string
+		next       string
+		isSpecial1 bool
+		isSpecial2 bool
+		expected   bool
 	}{
 		{
 			name:       "Hard wrap quebrado no meio da frase (caso clássico LaTeX)",
@@ -272,4 +272,3 @@ func TestPageBreakAndTableDelimiterProtectionInHeal(t *testing.T) {
 			toDeleteRanges[0].StartIndex, toDeleteRanges[1].StartIndex)
 	}
 }
-

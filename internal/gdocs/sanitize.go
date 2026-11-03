@@ -46,4 +46,3 @@ func SanitizeText(raw string) string {
 func UTF16Length(s string) int64 {
 	return int64(len(utf16.Encode([]rune(s))))
 }
-

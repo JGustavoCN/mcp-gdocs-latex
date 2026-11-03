@@ -15,12 +15,12 @@ import (
 
 // SyncReport encapsula o relatório auditável de integridade e sincronização do PDF
 type SyncReport struct {
-	FileID       string `json:"file_id"`
-	LocalMD5     string `json:"local_md5"`
-	RemoteMD5    string `json:"remote_md5"`
-	SizeBytes    int64  `json:"size_bytes"`
-	Status       string `json:"status"` // "IN_SYNC", "UPDATED", "ERROR"
-	Message      string `json:"message"`
+	FileID    string `json:"file_id"`
+	LocalMD5  string `json:"local_md5"`
+	RemoteMD5 string `json:"remote_md5"`
+	SizeBytes int64  `json:"size_bytes"`
+	Status    string `json:"status"` // "IN_SYNC", "UPDATED", "ERROR"
+	Message   string `json:"message"`
 }
 
 // CheckPDFSync apenas diagnostica a paridade de hash entre o PDF local e o PDF no Google Drive sem fazer upload

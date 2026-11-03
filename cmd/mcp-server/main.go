@@ -16,7 +16,10 @@ import (
 )
 
 const (
-	serverName    = "TCC_DocsLaTeX_Bridge"
+	serverName = "TCC_DocsLaTeX_Bridge"
+)
+
+var (
 	serverVersion = "1.0.0"
 )
 

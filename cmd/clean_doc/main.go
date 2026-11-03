@@ -112,4 +112,3 @@ func main() {
 
 	fmt.Println("🎉 Limpeza concluída com sucesso!")
 }
-
